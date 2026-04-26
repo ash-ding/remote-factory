@@ -9,19 +9,21 @@ import pytest
 
 from factory.study import (
     _detect_self_improvement,
-    _extract_deferred_bullets,
+    _extract_backlog_bullets,
     _extract_keywords,
     _extract_messages,
     _fetch_open_issues,
     _find_log_files,
     _get_github_user,
     _load_cross_project_insights,
-    _parse_deferred_items,
+    _migrate_legacy_backlog,
+    _parse_backlog_items,
     _path_to_slug,
-    _persist_deferred_items,
+    _persist_backlog_items,
     _read_obsidian_notes,
     _search_similar_projects,
-    remove_deferred_item,
+    add_backlog_item,
+    remove_backlog_item,
     study_project,
     study_project_local,
 )
@@ -243,7 +245,7 @@ class TestStudyProjectLocal:
         assert "A cool project" in result
 
     def test_hypothesis_budget_base(self, tmp_path, monkeypatch):
-        """No open issues → fix=0, growth=2, flex=2 → total=4."""
+        """No open issues, empty backlog → backlog-first budget format."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         with (
             patch("factory.study._search_similar_projects", return_value=[]),
@@ -252,11 +254,12 @@ class TestStudyProjectLocal:
         ):
             result = study_project_local(tmp_path / "myapp")
         assert "## Hypothesis Budget" in result
-        assert "**Fix slots** | 0" in result
-        assert "**Growth slots** | 2" in result
+        assert "**Backlog items: 0**" in result
+        assert "**Growth minimum: 2**" in result
+        assert "**New items: at most 2**" in result
 
     def test_hypothesis_budget_with_own_issues(self, tmp_path, monkeypatch):
-        """9 own issues → fix=3, growth=2, flex=2 → total=7."""
+        """9 own issues → issues listed in observations, budget shows backlog-first format."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         issues = [
             {"number": i, "title": f"Issue {i}", "labels": [], "body": "", "author": "owner"}
@@ -268,12 +271,12 @@ class TestStudyProjectLocal:
             patch("factory.study._get_github_user", return_value="owner"),
         ):
             result = study_project_local(tmp_path / "myapp")
-        assert "**Fix slots** | 3" in result
-        assert "**Recommended hypotheses: 7**" in result
         assert "Your Issues (9)" in result
+        assert "**Backlog items: 0**" in result
+        assert "open GitHub issues and critical bugs should be addressed" in result
 
-    def test_community_issues_do_not_drive_fix_slots(self, tmp_path, monkeypatch):
-        """9 community issues → fix=0 (none are yours), growth=2, flex=2 → total=4."""
+    def test_community_issues_do_not_drive_hypotheses(self, tmp_path, monkeypatch):
+        """9 community issues → listed as reference only."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         issues = [
             {"number": i, "title": f"Issue {i}", "labels": [], "body": "", "author": "external"}
@@ -285,12 +288,11 @@ class TestStudyProjectLocal:
             patch("factory.study._get_github_user", return_value="owner"),
         ):
             result = study_project_local(tmp_path / "myapp")
-        assert "**Fix slots** | 0" in result
         assert "Community Issues (9)" in result
         assert "do NOT auto-fix" in result
 
     def test_mixed_issues_split_correctly(self, tmp_path, monkeypatch):
-        """3 own + 6 community → fix=1, own section + community section."""
+        """3 own + 6 community → separate sections."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         own = [
             {"number": i, "title": f"Own {i}", "labels": [], "body": "", "author": "owner"}
@@ -308,10 +310,9 @@ class TestStudyProjectLocal:
             result = study_project_local(tmp_path / "myapp")
         assert "Your Issues (3)" in result
         assert "Community Issues (6)" in result
-        assert "**Fix slots** | 1" in result
 
     def test_hypothesis_budget_small_issue_count(self, tmp_path, monkeypatch):
-        """2 own issues → fix=0 (2//3=0), growth=2, flex=2 → total=4."""
+        """2 own issues → listed but budget is backlog-first format."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         issues = [
             {"number": i, "title": f"Issue {i}", "labels": [], "body": "", "author": "owner"}
@@ -323,8 +324,8 @@ class TestStudyProjectLocal:
             patch("factory.study._get_github_user", return_value="owner"),
         ):
             result = study_project_local(tmp_path / "myapp")
-        assert "**Fix slots** | 0" in result
-        assert "**Recommended hypotheses: 4**" in result
+        assert "Your Issues (2)" in result
+        assert "**Backlog items: 0**" in result
 
     def test_includes_obsidian_notes(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -929,29 +930,29 @@ class TestCmdStudyProjectsDir:
 class TestExtractDeferredBullets:
     def test_extracts_from_deferred_heading(self):
         content = "## Deferred\n- Camera integration\n- Genre expansion\n"
-        assert _extract_deferred_bullets(content) == [
+        assert _extract_backlog_bullets(content) == [
             "Camera integration",
             "Genre expansion",
         ]
 
     def test_extracts_from_post_mvp_heading(self):
         content = "### Post-MVP Items\n- OAuth login\n- Admin dashboard\n"
-        assert _extract_deferred_bullets(content) == ["OAuth login", "Admin dashboard"]
+        assert _extract_backlog_bullets(content) == ["OAuth login", "Admin dashboard"]
 
     def test_extracts_from_future_work_heading(self):
         content = "## Future Work\n* Internationalization\n"
-        assert _extract_deferred_bullets(content) == ["Internationalization"]
+        assert _extract_backlog_bullets(content) == ["Internationalization"]
 
     def test_extracts_from_backlog_heading(self):
         content = "### Backlog\n- Rate limiting\n"
-        assert _extract_deferred_bullets(content) == ["Rate limiting"]
+        assert _extract_backlog_bullets(content) == ["Rate limiting"]
 
     def test_stops_at_next_heading(self):
         content = (
             "## Deferred\n- Item one\n- Item two\n"
             "## Next Section\n- Not deferred\n"
         )
-        assert _extract_deferred_bullets(content) == ["Item one", "Item two"]
+        assert _extract_backlog_bullets(content) == ["Item one", "Item two"]
 
     def test_handles_multiple_deferred_sections(self):
         content = (
@@ -959,33 +960,33 @@ class TestExtractDeferredBullets:
             "## Other\n- Skip\n"
             "### Backlog\n- Second\n"
         )
-        assert _extract_deferred_bullets(content) == ["First", "Second"]
+        assert _extract_backlog_bullets(content) == ["First", "Second"]
 
     def test_skips_empty_bullets(self):
         content = "## Deferred\n- \n- Real item\n-  \n"
-        assert _extract_deferred_bullets(content) == ["Real item"]
+        assert _extract_backlog_bullets(content) == ["Real item"]
 
     def test_returns_empty_for_no_deferred_section(self):
         content = "## Hypotheses\n- H1: Add tests\n## FEEC\n- Fix stuff\n"
-        assert _extract_deferred_bullets(content) == []
+        assert _extract_backlog_bullets(content) == []
 
     def test_handles_bullet_prefix(self):
         content = "## Deferred\n• Unicode bullet item\n"
-        assert _extract_deferred_bullets(content) == ["Unicode bullet item"]
+        assert _extract_backlog_bullets(content) == ["Unicode bullet item"]
 
     def test_case_insensitive_heading(self):
         content = "## POST-MVP\n- Something\n## DEFERRED items\n- Another\n"
-        assert _extract_deferred_bullets(content) == ["Something", "Another"]
+        assert _extract_backlog_bullets(content) == ["Something", "Another"]
 
     def test_preserves_bold_in_items(self):
         content = "## Deferred\n- **Docker-Wyze-Bridge** camera integration\n"
-        assert _extract_deferred_bullets(content) == [
+        assert _extract_backlog_bullets(content) == [
             "**Docker-Wyze-Bridge** camera integration"
         ]
 
     def test_ignores_non_bullet_lines(self):
         content = "## Deferred\nSome paragraph text.\n- Actual item\n\nMore text.\n"
-        assert _extract_deferred_bullets(content) == ["Actual item"]
+        assert _extract_backlog_bullets(content) == ["Actual item"]
 
     def test_bold_text_heading(self):
         content = (
@@ -993,7 +994,7 @@ class TestExtractDeferredBullets:
             "**What is deferred (post-MVP):**\n"
             "- Docker-Wyze-Bridge\n- RSS feed\n- Deployment\n\n"
         )
-        assert _extract_deferred_bullets(content) == [
+        assert _extract_backlog_bullets(content) == [
             "Docker-Wyze-Bridge", "RSS feed", "Deployment",
         ]
 
@@ -1002,16 +1003,16 @@ class TestExtractDeferredBullets:
             "**Deferred:**\n- Item one\n- Item two\n"
             "**Other section:**\n- Not deferred\n"
         )
-        assert _extract_deferred_bullets(content) == ["Item one", "Item two"]
+        assert _extract_backlog_bullets(content) == ["Item one", "Item two"]
 
     def test_bold_heading_stops_at_markdown_heading(self):
         content = "**Backlog:**\n- Backlog item\n## Next Phase\n- Phase item\n"
-        assert _extract_deferred_bullets(content) == ["Backlog item"]
+        assert _extract_backlog_bullets(content) == ["Backlog item"]
 
 
-class TestParseDeferredItems:
+class TestParseBacklogItems:
     def test_returns_empty_when_no_factory_dir(self, tmp_path):
-        assert _parse_deferred_items(tmp_path) == []
+        assert _parse_backlog_items(tmp_path) == []
 
     def test_reads_from_current_md(self, tmp_path):
         strategy_dir = tmp_path / ".factory" / "strategy"
@@ -1019,72 +1020,96 @@ class TestParseDeferredItems:
         (strategy_dir / "current.md").write_text(
             "## Hypotheses\n- H1\n## Deferred\n- Camera feed\n- Genre expansion\n"
         )
-        assert _parse_deferred_items(tmp_path) == ["Camera feed", "Genre expansion"]
+        assert _parse_backlog_items(tmp_path) == ["Camera feed", "Genre expansion"]
 
-    def test_reads_from_deferred_md(self, tmp_path):
+    def test_reads_from_backlog_md(self, tmp_path):
+        strategy_dir = tmp_path / ".factory" / "strategy"
+        strategy_dir.mkdir(parents=True)
+        (strategy_dir / "backlog.md").write_text("- OAuth login\n- Rate limiting\n")
+        assert _parse_backlog_items(tmp_path) == ["OAuth login", "Rate limiting"]
+
+    def test_reads_from_legacy_deferred_md(self, tmp_path):
         strategy_dir = tmp_path / ".factory" / "strategy"
         strategy_dir.mkdir(parents=True)
         (strategy_dir / "deferred.md").write_text("- OAuth login\n- Rate limiting\n")
-        assert _parse_deferred_items(tmp_path) == ["OAuth login", "Rate limiting"]
+        result = _parse_backlog_items(tmp_path)
+        assert result == ["OAuth login", "Rate limiting"]
 
-    def test_merges_both_files_without_duplicates(self, tmp_path):
+    def test_migrate_legacy_renames_deferred_to_backlog(self, tmp_path):
         strategy_dir = tmp_path / ".factory" / "strategy"
         strategy_dir.mkdir(parents=True)
-        (strategy_dir / "deferred.md").write_text("- Camera feed\n- OAuth login\n")
+        (strategy_dir / "deferred.md").write_text("- OAuth login\n")
+        _migrate_legacy_backlog(tmp_path)
+        assert (strategy_dir / "backlog.md").exists()
+        assert not (strategy_dir / "deferred.md").exists()
+
+    def test_migrate_legacy_noop_when_backlog_exists(self, tmp_path):
+        strategy_dir = tmp_path / ".factory" / "strategy"
+        strategy_dir.mkdir(parents=True)
+        (strategy_dir / "backlog.md").write_text("- Existing\n")
+        (strategy_dir / "deferred.md").write_text("- Legacy\n")
+        _migrate_legacy_backlog(tmp_path)
+        assert "Existing" in (strategy_dir / "backlog.md").read_text()
+        assert (strategy_dir / "deferred.md").exists()
+
+    def test_merges_all_sources_without_duplicates(self, tmp_path):
+        strategy_dir = tmp_path / ".factory" / "strategy"
+        strategy_dir.mkdir(parents=True)
+        (strategy_dir / "backlog.md").write_text("- Camera feed\n- OAuth login\n")
         (strategy_dir / "current.md").write_text(
             "## Deferred\n- Camera feed\n- Genre expansion\n"
         )
-        result = _parse_deferred_items(tmp_path)
+        result = _parse_backlog_items(tmp_path)
         assert result == ["Camera feed", "OAuth login", "Genre expansion"]
 
-    def test_deferred_md_takes_precedence_in_order(self, tmp_path):
+    def test_backlog_md_takes_precedence_in_order(self, tmp_path):
         strategy_dir = tmp_path / ".factory" / "strategy"
         strategy_dir.mkdir(parents=True)
-        (strategy_dir / "deferred.md").write_text("- Persistent item\n")
+        (strategy_dir / "backlog.md").write_text("- Persistent item\n")
         (strategy_dir / "current.md").write_text("## Deferred\n- New item\n")
-        result = _parse_deferred_items(tmp_path)
+        result = _parse_backlog_items(tmp_path)
         assert result[0] == "Persistent item"
 
     def test_survives_current_md_rewrite(self, tmp_path):
         strategy_dir = tmp_path / ".factory" / "strategy"
         strategy_dir.mkdir(parents=True)
-        (strategy_dir / "deferred.md").write_text("- Camera feed\n- OAuth login\n")
+        (strategy_dir / "backlog.md").write_text("- Camera feed\n- OAuth login\n")
         (strategy_dir / "current.md").write_text(
             "## Hypotheses\n- H1: Add tests\n- H2: Improve logging\n"
         )
-        result = _parse_deferred_items(tmp_path)
+        result = _parse_backlog_items(tmp_path)
         assert result == ["Camera feed", "OAuth login"]
 
 
-class TestPersistDeferredItems:
-    def test_writes_deferred_file(self, tmp_path):
+class TestPersistBacklogItems:
+    def test_writes_backlog_file(self, tmp_path):
         strategy_dir = tmp_path / ".factory" / "strategy"
         strategy_dir.mkdir(parents=True)
-        _persist_deferred_items(tmp_path, ["Camera feed", "OAuth login"])
-        content = (strategy_dir / "deferred.md").read_text()
+        _persist_backlog_items(tmp_path, ["Camera feed", "OAuth login"])
+        content = (strategy_dir / "backlog.md").read_text()
         assert "- Camera feed\n" in content
         assert "- OAuth login\n" in content
 
     def test_creates_strategy_dir_if_missing(self, tmp_path):
-        _persist_deferred_items(tmp_path, ["Some item"])
-        assert (tmp_path / ".factory" / "strategy" / "deferred.md").exists()
+        _persist_backlog_items(tmp_path, ["Some item"])
+        assert (tmp_path / ".factory" / "strategy" / "backlog.md").exists()
 
     def test_no_op_for_empty_list(self, tmp_path):
-        _persist_deferred_items(tmp_path, [])
-        assert not (tmp_path / ".factory" / "strategy" / "deferred.md").exists()
+        _persist_backlog_items(tmp_path, [])
+        assert not (tmp_path / ".factory" / "strategy" / "backlog.md").exists()
 
     def test_overwrites_existing_file(self, tmp_path):
         strategy_dir = tmp_path / ".factory" / "strategy"
         strategy_dir.mkdir(parents=True)
-        (strategy_dir / "deferred.md").write_text("- Old item\n")
-        _persist_deferred_items(tmp_path, ["New item"])
-        content = (strategy_dir / "deferred.md").read_text()
+        (strategy_dir / "backlog.md").write_text("- Old item\n")
+        _persist_backlog_items(tmp_path, ["New item"])
+        content = (strategy_dir / "backlog.md").read_text()
         assert "Old item" not in content
         assert "- New item\n" in content
 
 
-class TestStudyDeferredIntegration:
-    def test_observations_include_deferred_items(self, tmp_path, monkeypatch):
+class TestStudyBacklogIntegration:
+    def test_observations_include_backlog_items(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         project_path = tmp_path / "myapp"
         project_path.mkdir()
@@ -1095,10 +1120,10 @@ class TestStudyDeferredIntegration:
         )
         with patch("factory.study._search_similar_projects", return_value=[]):
             result = study_project_local(project_path)
-        assert "## Deferred Items from Build Mode" in result
+        assert "## Backlog" in result
         assert "Camera integration" in result
 
-    def test_deferred_items_persisted_to_deferred_md(self, tmp_path, monkeypatch):
+    def test_backlog_items_persisted_to_backlog_md(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         project_path = tmp_path / "myapp"
         project_path.mkdir()
@@ -1107,11 +1132,11 @@ class TestStudyDeferredIntegration:
         (strategy_dir / "current.md").write_text("## Deferred\n- Camera feed\n")
         with patch("factory.study._search_similar_projects", return_value=[]):
             study_project_local(project_path)
-        deferred_path = strategy_dir / "deferred.md"
-        assert deferred_path.exists()
-        assert "Camera feed" in deferred_path.read_text()
+        backlog_path = strategy_dir / "backlog.md"
+        assert backlog_path.exists()
+        assert "Camera feed" in backlog_path.read_text()
 
-    def test_deferred_slots_in_budget(self, tmp_path, monkeypatch):
+    def test_backlog_count_in_budget(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         project_path = tmp_path / "myapp"
         project_path.mkdir()
@@ -1122,69 +1147,117 @@ class TestStudyDeferredIntegration:
         )
         with patch("factory.study._search_similar_projects", return_value=[]):
             result = study_project_local(project_path)
-        assert "**Deferred slots** | 2" in result
+        assert "**Backlog items: 3**" in result
 
-    def test_no_deferred_section_when_no_items(self, tmp_path, monkeypatch):
+    def test_empty_backlog_message_when_no_items(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         project_path = tmp_path / "myapp"
         project_path.mkdir()
         with patch("factory.study._search_similar_projects", return_value=[]):
             result = study_project_local(project_path)
-        assert "Deferred Items" not in result
-        assert "Deferred slots" not in result
+        assert "## Backlog" in result
+        assert "Backlog is empty" in result
 
 
-class TestRemoveDeferredItem:
+class TestRemoveBacklogItem:
     def test_removes_exact_match(self, tmp_path):
         strategy_dir = tmp_path / ".factory" / "strategy"
         strategy_dir.mkdir(parents=True)
-        (strategy_dir / "deferred.md").write_text(
+        (strategy_dir / "backlog.md").write_text(
             "- Camera feed\n- OAuth login\n- Genre expansion\n"
         )
-        assert remove_deferred_item(tmp_path, "OAuth login") is True
-        content = (strategy_dir / "deferred.md").read_text()
+        assert remove_backlog_item(tmp_path, "OAuth login") is True
+        content = (strategy_dir / "backlog.md").read_text()
         assert "OAuth login" not in content
         assert "Camera feed" in content
         assert "Genre expansion" in content
 
+    def test_removes_from_legacy_deferred_md(self, tmp_path):
+        strategy_dir = tmp_path / ".factory" / "strategy"
+        strategy_dir.mkdir(parents=True)
+        (strategy_dir / "deferred.md").write_text("- Camera feed\n- OAuth login\n")
+        assert remove_backlog_item(tmp_path, "OAuth login") is True
+        content = (strategy_dir / "deferred.md").read_text()
+        assert "OAuth login" not in content
+
     def test_returns_false_when_not_found(self, tmp_path):
         strategy_dir = tmp_path / ".factory" / "strategy"
         strategy_dir.mkdir(parents=True)
-        (strategy_dir / "deferred.md").write_text("- Camera feed\n")
-        assert remove_deferred_item(tmp_path, "Nonexistent item") is False
+        (strategy_dir / "backlog.md").write_text("- Camera feed\n")
+        assert remove_backlog_item(tmp_path, "Nonexistent item") is False
 
     def test_returns_false_when_no_file(self, tmp_path):
-        assert remove_deferred_item(tmp_path, "Anything") is False
+        assert remove_backlog_item(tmp_path, "Anything") is False
 
     def test_deletes_file_when_last_item_removed(self, tmp_path):
         strategy_dir = tmp_path / ".factory" / "strategy"
         strategy_dir.mkdir(parents=True)
-        (strategy_dir / "deferred.md").write_text("- Only item\n")
-        assert remove_deferred_item(tmp_path, "Only item") is True
-        assert not (strategy_dir / "deferred.md").exists()
+        (strategy_dir / "backlog.md").write_text("- Only item\n")
+        assert remove_backlog_item(tmp_path, "Only item") is True
+        assert not (strategy_dir / "backlog.md").exists()
 
     def test_no_partial_match(self, tmp_path):
         strategy_dir = tmp_path / ".factory" / "strategy"
         strategy_dir.mkdir(parents=True)
-        (strategy_dir / "deferred.md").write_text("- Camera feed integration\n")
-        assert remove_deferred_item(tmp_path, "Camera feed") is False
-        assert (strategy_dir / "deferred.md").exists()
+        (strategy_dir / "backlog.md").write_text("- Camera feed integration\n")
+        assert remove_backlog_item(tmp_path, "Camera feed") is False
+        assert (strategy_dir / "backlog.md").exists()
 
     def test_handles_different_bullet_styles(self, tmp_path):
         strategy_dir = tmp_path / ".factory" / "strategy"
         strategy_dir.mkdir(parents=True)
-        (strategy_dir / "deferred.md").write_text("* Camera feed\n")
-        assert remove_deferred_item(tmp_path, "Camera feed") is True
-        assert not (strategy_dir / "deferred.md").exists()
+        (strategy_dir / "backlog.md").write_text("* Camera feed\n")
+        assert remove_backlog_item(tmp_path, "Camera feed") is True
+        assert not (strategy_dir / "backlog.md").exists()
+
+    def test_removes_from_both_files(self, tmp_path):
+        strategy_dir = tmp_path / ".factory" / "strategy"
+        strategy_dir.mkdir(parents=True)
+        (strategy_dir / "backlog.md").write_text("- OAuth login\n- Other\n")
+        (strategy_dir / "deferred.md").write_text("- OAuth login\n- Legacy\n")
+        assert remove_backlog_item(tmp_path, "OAuth login") is True
+        assert "OAuth login" not in (strategy_dir / "backlog.md").read_text()
+        assert "OAuth login" not in (strategy_dir / "deferred.md").read_text()
+        assert "Other" in (strategy_dir / "backlog.md").read_text()
+        assert "Legacy" in (strategy_dir / "deferred.md").read_text()
 
 
-class TestCmdDeferredRemove:
+class TestAddBacklogItem:
+    def test_adds_new_item(self, tmp_path):
+        assert add_backlog_item(tmp_path, "New feature") is True
+        content = (tmp_path / ".factory" / "strategy" / "backlog.md").read_text()
+        assert "- New feature\n" in content
+
+    def test_rejects_duplicate(self, tmp_path):
+        strategy_dir = tmp_path / ".factory" / "strategy"
+        strategy_dir.mkdir(parents=True)
+        (strategy_dir / "backlog.md").write_text("- Existing item\n")
+        assert add_backlog_item(tmp_path, "Existing item") is False
+
+    def test_appends_to_existing(self, tmp_path):
+        strategy_dir = tmp_path / ".factory" / "strategy"
+        strategy_dir.mkdir(parents=True)
+        (strategy_dir / "backlog.md").write_text("- First item\n")
+        assert add_backlog_item(tmp_path, "Second item") is True
+        content = (strategy_dir / "backlog.md").read_text()
+        assert "First item" in content
+        assert "Second item" in content
+
+
+class TestCmdBacklogRemove:
     def test_cli_subcommand_exists(self):
         from factory.cli import build_parser
 
         parser = build_parser()
+        args = parser.parse_args(["backlog-remove", "/some/path", "some item"])
+        assert args.path == "/some/path"
+        assert args.item == "some item"
+
+    def test_alias_deferred_remove_works(self):
+        from factory.cli import build_parser
+
+        parser = build_parser()
         args = parser.parse_args(["deferred-remove", "/some/path", "some item"])
-        assert args.command == "deferred-remove"
         assert args.path == "/some/path"
         assert args.item == "some item"
 
@@ -1193,36 +1266,43 @@ class TestCmdDeferredRemove:
 
         strategy_dir = tmp_path / ".factory" / "strategy"
         strategy_dir.mkdir(parents=True)
-        (strategy_dir / "deferred.md").write_text("- Camera feed\n- OAuth\n")
-        result = main(["deferred-remove", str(tmp_path), "Camera feed"])
+        (strategy_dir / "backlog.md").write_text("- Camera feed\n- OAuth\n")
+        result = main(["backlog-remove", str(tmp_path), "Camera feed"])
         assert result == 0
-        assert "Camera feed" not in (strategy_dir / "deferred.md").read_text()
+        assert "Camera feed" not in (strategy_dir / "backlog.md").read_text()
 
     def test_returns_error_when_not_found(self, tmp_path):
         from factory.cli import main
 
         strategy_dir = tmp_path / ".factory" / "strategy"
         strategy_dir.mkdir(parents=True)
-        (strategy_dir / "deferred.md").write_text("- Camera feed\n")
-        result = main(["deferred-remove", str(tmp_path), "Nonexistent"])
+        (strategy_dir / "backlog.md").write_text("- Camera feed\n")
+        result = main(["backlog-remove", str(tmp_path), "Nonexistent"])
         assert result == 1
 
 
-class TestCmdDeferredList:
+class TestCmdBacklogList:
     def test_cli_subcommand_exists(self):
         from factory.cli import build_parser
 
         parser = build_parser()
+        args = parser.parse_args(["backlog-list", "/some/path"])
+        assert args.path == "/some/path"
+
+    def test_alias_deferred_list_works(self):
+        from factory.cli import build_parser
+
+        parser = build_parser()
         args = parser.parse_args(["deferred-list", "/some/path"])
-        assert args.command == "deferred-list"
+        assert args.path == "/some/path"
 
     def test_lists_items(self, tmp_path, capsys):
         from factory.cli import main
 
         strategy_dir = tmp_path / ".factory" / "strategy"
         strategy_dir.mkdir(parents=True)
-        (strategy_dir / "deferred.md").write_text("- Camera feed\n- OAuth login\n")
-        result = main(["deferred-list", str(tmp_path)])
+        (strategy_dir / "backlog.md").write_text("- Camera feed\n- OAuth login\n")
+        result = main(["backlog-list", str(tmp_path)])
         assert result == 0
         output = capsys.readouterr().out
         assert "Camera feed" in output
@@ -1231,12 +1311,12 @@ class TestCmdDeferredList:
     def test_empty_list(self, tmp_path, capsys):
         from factory.cli import main
 
-        result = main(["deferred-list", str(tmp_path)])
+        result = main(["backlog-list", str(tmp_path)])
         assert result == 0
-        assert "No deferred items" in capsys.readouterr().out
+        assert "No backlog items" in capsys.readouterr().out
 
     def test_b5a_items_survive_current_md_rewrite(self, tmp_path):
-        """B5a scenario: Builder adds deferred items to current.md, deferred-list
+        """B5a scenario: Builder adds items to current.md, backlog-list
         persists them, then Strategist rewrites current.md — items survive."""
         from factory.cli import main
 
@@ -1246,14 +1326,33 @@ class TestCmdDeferredList:
             "## Build Plan\n- Phase 1: scaffold\n## Deferred\n"
             "- Camera integration\n- Docker-Wyze-Bridge setup\n"
         )
-        main(["deferred-list", str(tmp_path)])
-        deferred_path = strategy_dir / "deferred.md"
-        assert deferred_path.exists()
-        assert "Camera integration" in deferred_path.read_text()
+        main(["backlog-list", str(tmp_path)])
+        backlog_path = strategy_dir / "backlog.md"
+        assert backlog_path.exists()
+        assert "Camera integration" in backlog_path.read_text()
 
         (strategy_dir / "current.md").write_text(
             "## Hypotheses\n- H1: Add test coverage\n- H2: Refactor auth\n"
         )
-        items = _parse_deferred_items(tmp_path)
+        items = _parse_backlog_items(tmp_path)
         assert "Camera integration" in items
         assert "Docker-Wyze-Bridge setup" in items
+
+
+class TestCmdBacklogAdd:
+    def test_adds_item_via_cli(self, tmp_path):
+        from factory.cli import main
+
+        result = main(["backlog-add", str(tmp_path), "New feature"])
+        assert result == 0
+        content = (tmp_path / ".factory" / "strategy" / "backlog.md").read_text()
+        assert "New feature" in content
+
+    def test_rejects_duplicate_via_cli(self, tmp_path):
+        from factory.cli import main
+
+        strategy_dir = tmp_path / ".factory" / "strategy"
+        strategy_dir.mkdir(parents=True)
+        (strategy_dir / "backlog.md").write_text("- Existing\n")
+        result = main(["backlog-add", str(tmp_path), "Existing"])
+        assert result == 1

@@ -29,11 +29,12 @@ Deeply investigate the project's domain to inform the Strategist's hypotheses.
 
 ### What You Do
 1. **Run local study**: `uv run python -m factory study "$PROJECT_PATH"` for interaction logs + shallow search
-2. **Read project context**: README, pyproject.toml, experiment history, current strategy
-3. **Search externally**: Use WebSearch for similar projects, best practices, relevant techniques
-4. **Read deeply**: Use WebFetch on the top 3-5 most promising search results
-5. **Check vault knowledge**: Read factory vault for cross-project patterns and prior learnings
-6. **Synthesize**: Write structured research report
+2. **Read the backlog**: Read `.factory/strategy/backlog.md` and assess which items are achievable, which are blocked, and which may be already done or obsolete. Note this in your report so the Strategist can prioritize.
+3. **Read project context**: README, pyproject.toml, experiment history, current strategy
+4. **Search externally**: Use WebSearch for similar projects, best practices, relevant techniques
+5. **Read deeply**: Use WebFetch on the top 3-5 most promising search results
+6. **Check vault knowledge**: Read factory vault for cross-project patterns and prior learnings
+7. **Synthesize**: Write structured research report
 
 ### Output (Research)
 Write to `$PROJECT_PATH/.factory/strategy/research.md`:

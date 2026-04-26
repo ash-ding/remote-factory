@@ -230,14 +230,21 @@ Generate a phased build plan as GitHub issues:
 - Phase 2-N: Feature implementation in dependency order
 Each issue should be one PR's worth of work.
 
-At the end of the plan, add a section for items not included in MVP:
+Build EVERYTHING in this pass. The only items that may be deferred to the backlog are things that genuinely require human intervention:
+- Missing API keys or credentials the user must provide
+- External accounts that need manual setup (payment providers, cloud services)
+- Permissions the user must grant
+- External services that need manual provisioning
+
+Everything else — features, integrations, UI, tests — MUST be built now, not deferred.
+
+If any items truly cannot be built without human intervention, list them at the end:
 
 ## Deferred
 
-- <item 1>
-- <item 2>
+- <item requiring human intervention — explain what's needed>
 
-This section MUST use a markdown heading (## Deferred) — not bold text or other formatting. Items listed here will be automatically prioritized when the project enters Improve mode.
+This section MUST use a markdown heading (## Deferred) — not bold text or other formatting. Items listed here become the project's backlog for Improve mode.
 
 Write the plan to .factory/strategy/current.md." --project "$PROJECT_PATH" --timeout 300
 ```
@@ -253,16 +260,16 @@ This is a **hard gate**. The Builder MUST NOT start until you approve the plan.
    - Is Phase 1 always scaffold + eval harness?
    - Is the total scope achievable or is it over-ambitious?
    - Are there any phases that should be split, merged, or reordered?
-   - **Does the plan have a `## Deferred` section?** If items were excluded from MVP scope, they MUST be listed under a `## Deferred` heading (not bold text, not inline mentions). REDIRECT if deferred items exist but aren't in a proper `## Deferred` section.
+   - **Deferral strictness:** Does the `## Deferred` section (if present) ONLY contain items that require human intervention? If it contains features, integrations, or anything that could be built without a human, **REDIRECT** the Strategist to include those items in the build phases. The factory builds everything it can — deferral is not for convenience, only for genuine blockers.
 3. Write verdict to `.factory/reviews/ceo-verdict-strategist.md`
-4. If REDIRECT: re-invoke the Strategist with specific corrections (e.g., "Phase 3 is too large — split into 3a and 3b", "Missing error handling phase")
-5. If PROCEED: write `PLAN APPROVED` in your verdict file, then persist deferred items:
+4. If REDIRECT: re-invoke the Strategist with specific corrections (e.g., "Phase 3 is too large — split into 3a and 3b", "Move OAuth integration from Deferred to a build phase — we don't need user credentials to scaffold it")
+5. If PROCEED: write `PLAN APPROVED` in your verdict file, then persist backlog items:
 
 ```bash
-uv run python -m factory deferred-list "$PROJECT_PATH"
+uv run python -m factory backlog-list "$PROJECT_PATH"
 ```
 
-If deferred items were parsed, they are now in `.factory/strategy/deferred.md` and will survive future strategy rewrites. Continue to B2.
+If backlog items were parsed, they are now in `.factory/strategy/backlog.md` and will survive future strategy rewrites. Continue to B2.
 
 ### B2: MANDATORY Archivist — record approved plan (DO NOT SKIP)
 
@@ -372,15 +379,15 @@ Unit tests passing means nothing if the project doesn't work as a whole. Before 
 
 7. **Only proceed when e2e PASSES.** If BLOCKED on user input, wait for the user to respond. If FAIL, spawn the Builder to fix the issue and re-test.
 
-### B5a: Persist Deferred Items
+### B5a: Persist Backlog Items
 
-Before leaving Build mode, extract all deferred items from the build plan so the Strategist can address them in Improve mode. The Builder may have deferred additional items during implementation that weren't in the original plan.
+Before leaving Build mode, extract any items that were deferred (only those requiring human intervention) so they become the project's backlog for Improve mode.
 
 ```bash
-uv run python -m factory deferred-list "$PROJECT_PATH"
+uv run python -m factory backlog-list "$PROJECT_PATH"
 ```
 
-This reads the `## Deferred` section from `.factory/strategy/current.md`, merges with any existing `.factory/strategy/deferred.md`, and writes the combined list back. If no deferred items exist, this is a no-op.
+This reads the `## Deferred` section from `.factory/strategy/current.md`, merges with any existing `.factory/strategy/backlog.md`, and writes the combined list back. If no backlog items exist, this is a no-op.
 
 ### B6: Re-detect state
 
@@ -519,13 +526,13 @@ Include your research review notes so the Strategist knows what the CEO prioriti
 **Focus Directive:** If your task includes a `## Focus Directive` section, you MUST relay it to the Strategist. Append the focus directive text to the Strategist's task so it can prioritize hypotheses targeting that area. If no focus directive is present, invoke the Strategist normally.
 
 ```bash
-factory agent strategist --task "Generate prioritized hypotheses for $PROJECT_PATH. Read the Hypothesis Budget from observations to determine how many (default 3, up to 5).
+factory agent strategist --task "Generate prioritized hypotheses for $PROJECT_PATH.
 
+Read the backlog at .factory/strategy/backlog.md — clear as many items as possible this cycle.
+Read the Hypothesis Budget from observations for constraints (max new items, growth minimum).
 Read the CEO's research review at .factory/reviews/ceo-verdict-researcher.md for CEO priorities.
 
 $FOCUS_DIRECTIVE
-
-$DEFERRED_DIRECTIVE
 
 Context:
 $(uv run python -m factory history "$PROJECT_PATH" 2>/dev/null || echo 'No experiments yet')
@@ -544,15 +551,11 @@ $(cd "$PROJECT_PATH" && git log --oneline -20)
 
 $(uv run python -m factory eval "$PROJECT_PATH")
 
-Write hypotheses to .factory/strategy/current.md. Each must be specific, scoped (one PR's worth), tied to observations, with expected impact on eval dimensions." --project "$PROJECT_PATH" --timeout 300
+Write hypotheses to .factory/strategy/current.md. Each must be specific, scoped (one PR's worth), tied to observations, with expected impact on eval dimensions. Tag backlog items with **Backlog item:** and new items with **New:**." --project "$PROJECT_PATH" --timeout 300
 ```
 
 Where `$FOCUS_DIRECTIVE` is either empty (no focus) or the focus text from your task, e.g.:
 `Focus Directive: Narrow improvement efforts to: dashboard UI`
-
-Where `$DEFERRED_DIRECTIVE` is constructed by the CEO before invoking the Strategist: check if `.factory/strategy/observations.md` contains a "Deferred Items from Build Mode" section. If it does, set `$DEFERRED_DIRECTIVE` to:
-`Deferred Items: The observations include deferred items from Build mode. You MUST address at least one with a hypothesis tagged **Deferred item:**. Deferred items take priority over Exploit and Explore.`
-If no deferred items exist, leave `$DEFERRED_DIRECTIVE` empty.
 
 **Step 1r: CEO Review — Strategy (HARD GATE)**
 
@@ -567,7 +570,8 @@ This is a **hard gate**. Do NOT proceed to Step 2 until you approve the hypothes
    - Is it redundant with a previously reverted experiment?
    - **If a Focus Directive was set:** does the hypothesis target the focused area? At least 2/3 of hypotheses must align with the focus. REDIRECT if focus is ignored.
    - **If YOUR open GitHub issues exist in observations:** does at least one hypothesis address them? REDIRECT if your issues are ignored without justification. Community issues (filed by others) should NOT drive hypotheses unless explicitly targeted via --focus.
-   - **If deferred items exist in observations:** does at least one hypothesis have a `**Deferred item:**` tag addressing a deferred/post-MVP item? REDIRECT if deferred items exist and none are addressed. Deferred items are acknowledged product gaps — they take priority over general Exploit and Explore.
+   - **Backlog convergence:** If the backlog has N items, the strategist should be clearing a significant portion of them, not just 1-2 while adding more new items. Count hypotheses tagged `**Backlog item:**` vs `**New:**`. If new items outnumber backlog items being cleared, REDIRECT — the backlog must shrink, not grow.
+   - **New item cap:** At most 2 new items per cycle (or the configured `max_new`). If the strategist added more, REDIRECT.
 3. Write verdict to `.factory/reviews/ceo-verdict-strategist.md`
 4. If REDIRECT: re-invoke the Strategist with corrections (e.g., "H2 is too vague — specify which files to change", "H1 duplicates reverted experiment #5")
 5. If PROCEED: write `PLAN APPROVED` in your verdict, list the approved hypotheses in priority order
@@ -767,9 +771,9 @@ uv run python -m factory finalize "$PROJECT_PATH" \
     --issue $ISSUE_NUM --pr $PR_NUM \
     --notes "ceo:keep score_delta=+X.XXXX precheck=passed agents_spawned=R,S,B,R,E"
 
-# If this experiment addressed a deferred item, remove it from deferred.md
-# Check the hypothesis for a **Deferred item:** tag — if present, run:
-uv run python -m factory deferred-remove "$PROJECT_PATH" "<exact deferred item text>"
+# If this experiment addressed a backlog item, remove it from backlog.md
+# Check the hypothesis for a **Backlog item:** tag — if present, run:
+uv run python -m factory backlog-remove "$PROJECT_PATH" "<exact backlog item text>"
 ```
 
 **If precheck FAILS → Mandatory Revert:**
@@ -835,6 +839,16 @@ factory checkpoint "$PROJECT_PATH" --save --mode improve \
 Where `$COMPLETED_EXP_IDS` is a comma-separated list of all experiment IDs processed so far in this cycle (e.g., `"1,2,3"`).
 
 This MUST happen before proceeding to the next hypothesis or to Step 3.
+
+### Step 2i: Persist New Backlog Items
+
+After all experiments are processed, check if the Strategist added new items during this cycle. Read `.factory/strategy/current.md` for a `## New Backlog Items` section. For each new item listed, persist it:
+
+```bash
+uv run python -m factory backlog-add "$PROJECT_PATH" "<new item text>"
+```
+
+This ensures new ideas from the Strategist survive into future cycles.
 
 ### Step 3: Final Archive (BLOCKING — DO NOT SKIP)
 
@@ -1139,6 +1153,6 @@ When the Strategist generates hypotheses, they should follow the FEEC priority h
 3. **Explore** — add new features, try new approaches
 4. **Combine** — merge successful patterns from different experiments
 
-**Deferred item priority:** When `.factory/strategy/current.md` contains deferred/post-MVP items (features explicitly deferred during Build mode), the Strategist MUST include at least one hypothesis addressing a deferred item. Deferred items represent acknowledged product gaps — they take priority over Exploit and Explore. The effective ordering becomes Fix → Deferred → Exploit → Explore → Combine. If no deferred items exist, standard FEEC applies.
+**Backlog priority:** The Strategist reads `.factory/strategy/backlog.md` and clears as many items as possible each cycle. Backlog items are the primary work — new items are capped. FEEC ordering applies within the backlog: Fix items first, then Exploit, then Explore. When the backlog is empty, the Strategist is in pure exploration mode.
 
 Stuck detection: if 3+ consecutive experiments in the same category are reverted, the Strategist MUST pivot to a different category.

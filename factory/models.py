@@ -26,13 +26,12 @@ class ProjectState(str, Enum):
 
 
 class HypothesisBudget(BaseModel):
-    """Structured hypothesis budget — configurable per-project and per-run."""
+    """Backlog-first hypothesis budget — configurable per-project and per-run."""
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
     min_growth: int = 2
-    min_fix: int = 0
-    max_total: int = 7
+    max_new: int = 2
 
 
 class ProjectEvalDimension(BaseModel):
