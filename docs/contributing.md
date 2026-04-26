@@ -11,7 +11,7 @@ uv sync --all-groups    # Install all deps including dev
 ## Running Tests
 
 ```bash
-uv run pytest -v                  # Full suite (878 tests)
+uv run pytest -v                  # Full suite (954 tests)
 uv run pytest tests/test_cli.py   # Single file
 uv run pytest -k "test_detect"    # By name pattern
 uv run pytest --cov               # With coverage
@@ -117,7 +117,7 @@ factory/
 ├── obsidian/               # Vault integration
 └── notify/                 # Telegram notifications
 
-tests/                      # 878 tests mirroring factory/ structure
+tests/                      # 954 tests mirroring factory/ structure
 ```
 
 ## Adding a New CLI Command
