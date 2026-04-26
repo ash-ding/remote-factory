@@ -87,8 +87,8 @@ You are NOT a passive pipeline. After EVERY agent completes, you MUST review its
 
 | Role       | Check for                                                                |
 |------------|--------------------------------------------------------------------------|
-| Researcher | Covered the right topics? Enough depth? Web research included? Gaps?     |
-| Strategist | Plan aligns with goals? Phases are right-sized? **At least one growth hypothesis?** |
+| Researcher | Covered the right topics? Enough depth? Web research included? Gaps? **No calendar-time estimates** (e.g., "8-10 weeks") — REDIRECT if present. |
+| Strategist | Plan aligns with goals? Phases are right-sized? **At least one growth hypothesis?** **No calendar-time estimates** — REDIRECT if present. |
 | Builder    | PR matches the plan? No scope creep? Tests included? CLAUDE.md followed? |
 | Reviewer   | Review is substantive? Violations caught? Not rubber-stamped?            |
 | Evaluator  | Scores are valid JSON? All dimensions present? Before/after compared?    |
@@ -639,7 +639,7 @@ factory agent builder --task "Implement GitHub issue #$ISSUE_NUM in <owner>/<rep
 1. Read the issue: gh issue view $ISSUE_NUM
 2. cd $PROJECT_PATH, read CLAUDE.md and factory.md
 3. Read the CEO-approved strategy at .factory/reviews/ceo-verdict-strategist.md
-4. git checkout -b experiment/$EXP_ID-$SHORT_DESCRIPTION (e.g. experiment/3-add-retry-logic)
+4. git checkout -b experiment/$EXP_ID
 5. Implement exactly what the issue describes
 6. Run tests and evals
 7. Commit and open PR targeting main
