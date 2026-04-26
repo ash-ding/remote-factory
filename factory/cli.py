@@ -325,30 +325,42 @@ def cmd_study(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_deferred_remove(args: argparse.Namespace) -> int:
-    from factory.study import remove_deferred_item
+def cmd_backlog_remove(args: argparse.Namespace) -> int:
+    from factory.study import remove_backlog_item
 
     project_path = Path(args.path)
     item_text = args.item
-    if remove_deferred_item(project_path, item_text):
-        print(f"Removed deferred item: {item_text}")
+    if remove_backlog_item(project_path, item_text):
+        print(f"Removed backlog item: {item_text}")
         return 0
-    print(f"Deferred item not found: {item_text}", file=sys.stderr)
+    print(f"Backlog item not found: {item_text}", file=sys.stderr)
     return 1
 
 
-def cmd_deferred_list(args: argparse.Namespace) -> int:
-    from factory.study import _parse_deferred_items, _persist_deferred_items
+def cmd_backlog_list(args: argparse.Namespace) -> int:
+    from factory.study import _parse_backlog_items, _persist_backlog_items
 
     project_path = Path(args.path)
-    items = _parse_deferred_items(project_path)
+    items = _parse_backlog_items(project_path)
     if not items:
-        print("No deferred items.")
+        print("No backlog items.")
         return 0
-    _persist_deferred_items(project_path, items)
+    _persist_backlog_items(project_path, items)
     for item in items:
         print(f"- {item}")
     return 0
+
+
+def cmd_backlog_add(args: argparse.Namespace) -> int:
+    from factory.study import add_backlog_item
+
+    project_path = Path(args.path)
+    item_text = args.item
+    if add_backlog_item(project_path, item_text):
+        print(f"Added backlog item: {item_text}")
+        return 0
+    print(f"Backlog item already exists: {item_text}", file=sys.stderr)
+    return 1
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -1053,8 +1065,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     focus = getattr(args, "focus", None)
     discover_only = getattr(args, "discover_only", False)
     min_growth = getattr(args, "min_growth", None)
-    min_fix = getattr(args, "min_fix", None)
-    max_total = getattr(args, "max_total", None)
+    max_new = getattr(args, "max_new", None)
     branch = getattr(args, "branch", None)
     model = _resolve_model(args)
     _print_banner(mode)
@@ -1062,7 +1073,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
 
     task = _build_ceo_task(
         project_path, mode, context, focus=focus, prompt_file=prompt_file,
-        min_growth=min_growth, min_fix=min_fix, max_total=max_total, branch=branch,
+        min_growth=min_growth, max_new=max_new, branch=branch,
         discover_only=discover_only,
     )
 
@@ -1090,7 +1101,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
             return code
         return _chain_modes(
             project_path, focus=focus,
-            min_growth=min_growth, min_fix=min_fix, max_total=max_total, branch=branch,
+            min_growth=min_growth, max_new=max_new, branch=branch,
             already_improved=mode in ("improve", "meta") or discover_only,
             model=model,
         )
@@ -1424,8 +1435,7 @@ def _build_ceo_task(
     focus: str | None = None,
     prompt_file: str | None = None,
     min_growth: int | None = None,
-    min_fix: int | None = None,
-    max_total: int | None = None,
+    max_new: int | None = None,
     branch: str | None = None,
     discover_only: bool = False,
 ) -> str:
@@ -1451,15 +1461,13 @@ def _build_ceo_task(
             f"target PRs against `{branch}`. After revert, checkout `{branch}` instead of main.\n"
         )
 
-    if any(v is not None for v in (min_growth, min_fix, max_total)):
+    if any(v is not None for v in (min_growth, max_new)):
         budget_lines = ["\n\n## Budget Override\n"]
         budget_lines.append("The user has overridden the hypothesis budget for this run:")
         if min_growth is not None:
-            budget_lines.append(f"- **min_growth:** {min_growth} (guaranteed growth slots)")
-        if min_fix is not None:
-            budget_lines.append(f"- **min_fix:** {min_fix} (guaranteed fix slots)")
-        if max_total is not None:
-            budget_lines.append(f"- **max_total:** {max_total} (maximum hypotheses)")
+            budget_lines.append(f"- **min_growth:** {min_growth} (guaranteed growth hypotheses)")
+        if max_new is not None:
+            budget_lines.append(f"- **max_new:** {max_new} (max new items added to backlog per cycle)")
         budget_lines.append("")
         budget_lines.append("Pass these overrides to the Strategist. They take precedence over "
                            "factory.md defaults and study-computed values.")
@@ -1502,8 +1510,7 @@ def _chain_modes(
     project_path: Path,
     focus: str | None = None,
     min_growth: int | None = None,
-    min_fix: int | None = None,
-    max_total: int | None = None,
+    max_new: int | None = None,
     branch: str | None = None,
     already_improved: bool = False,
     max_chains: int = 3,
@@ -1533,7 +1540,7 @@ def _chain_modes(
         )
         code = _run_single_cycle(
             project_path, next_mode, focus=focus,
-            min_growth=min_growth, min_fix=min_fix, max_total=max_total, branch=branch,
+            min_growth=min_growth, max_new=max_new, branch=branch,
             model=model,
         )
         if code != 0:
@@ -1548,8 +1555,7 @@ def _run_single_cycle(
     focus: str | None = None,
     prompt_file: str | None = None,
     min_growth: int | None = None,
-    min_fix: int | None = None,
-    max_total: int | None = None,
+    max_new: int | None = None,
     branch: str | None = None,
     discover_only: bool = False,
     model: str | None = None,
@@ -1560,7 +1566,7 @@ def _run_single_cycle(
 
     task = _build_ceo_task(
         project_path, mode, context, focus=focus, prompt_file=prompt_file,
-        min_growth=min_growth, min_fix=min_fix, max_total=max_total, branch=branch,
+        min_growth=min_growth, max_new=max_new, branch=branch,
         discover_only=discover_only,
     )
 
@@ -1597,14 +1603,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     focus = getattr(args, "focus", None)
     discover_only = getattr(args, "discover_only", False)
     min_growth = getattr(args, "min_growth", None)
-    min_fix = getattr(args, "min_fix", None)
-    max_total = getattr(args, "max_total", None)
+    max_new = getattr(args, "max_new", None)
     branch = getattr(args, "branch", None)
     model = _resolve_model(args)
     _print_banner(mode)
     _ensure_dashboard(project_path)
 
-    budget_kwargs = dict(min_growth=min_growth, min_fix=min_fix, max_total=max_total, branch=branch)
+    budget_kwargs = dict(min_growth=min_growth, max_new=max_new, branch=branch)
     skip_improve = mode in ("improve", "meta") or discover_only
 
     if not loop:
@@ -1616,7 +1621,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             return code
         return _chain_modes(
             project_path, focus=focus, already_improved=skip_improve,
-            min_growth=min_growth, min_fix=min_fix, max_total=max_total, branch=branch,
+            min_growth=min_growth, max_new=max_new, branch=branch,
             model=model,
         )
 
@@ -1648,7 +1653,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             )
             _chain_modes(
                 project_path, focus=focus, already_improved=skip_improve,
-                min_growth=min_growth, min_fix=min_fix, max_total=max_total, branch=branch,
+                min_growth=min_growth, max_new=max_new, branch=branch,
                 model=model,
             )
             _emit_cli_event(project_path, "cycle.completed", {"cycle": cycle, "mode": mode})
@@ -1765,14 +1770,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory containing factory-managed projects for cross-project insights",
     )
 
-    # deferred-remove
-    p = sub.add_parser("deferred-remove", help="Remove a completed deferred item")
+    # backlog-remove (alias: deferred-remove)
+    p = sub.add_parser("backlog-remove", aliases=["deferred-remove"], help="Remove a completed backlog item")
     p.add_argument("path", help="Path to the project")
-    p.add_argument("item", help="Exact text of the deferred item to remove")
+    p.add_argument("item", help="Exact text of the backlog item to remove")
 
-    # deferred-list
-    p = sub.add_parser("deferred-list", help="List pending deferred items")
+    # backlog-list (alias: deferred-list)
+    p = sub.add_parser("backlog-list", aliases=["deferred-list"], help="List pending backlog items")
     p.add_argument("path", help="Path to the project")
+
+    # backlog-add
+    p = sub.add_parser("backlog-add", help="Add a new item to the backlog")
+    p.add_argument("path", help="Path to the project")
+    p.add_argument("item", help="Text of the backlog item to add")
 
     # status
     p = sub.add_parser("status", help="Print project status summary")
@@ -1942,11 +1952,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only run discovery and review — do not chain into improve",
     )
     p.add_argument("--min-growth", type=int, default=None,
-                    help="Minimum guaranteed growth hypothesis slots (default: 2)")
-    p.add_argument("--min-fix", type=int, default=None,
-                    help="Minimum fix hypothesis slots (default: 0, scales with open issues)")
-    p.add_argument("--max-total", type=int, default=None,
-                    help="Maximum total hypotheses per cycle (default: 7)")
+                    help="Minimum guaranteed growth hypotheses (default: 2)")
+    p.add_argument("--max-new", type=int, default=None,
+                    help="Max new items added to backlog per cycle (default: 2)")
     p.add_argument("--branch", default=None,
                     help="Target branch for PRs (default: from factory.md, fallback: main)")
     p.add_argument("--model", default=None,
@@ -1987,11 +1995,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum number of cycles (default: unlimited)",
     )
     p.add_argument("--min-growth", type=int, default=None,
-                    help="Minimum guaranteed growth hypothesis slots (default: 2)")
-    p.add_argument("--min-fix", type=int, default=None,
-                    help="Minimum fix hypothesis slots (default: 0, scales with open issues)")
-    p.add_argument("--max-total", type=int, default=None,
-                    help="Maximum total hypotheses per cycle (default: 7)")
+                    help="Minimum guaranteed growth hypotheses (default: 2)")
+    p.add_argument("--max-new", type=int, default=None,
+                    help="Max new items added to backlog per cycle (default: 2)")
     p.add_argument("--branch", default=None,
                     help="Target branch for PRs (default: from factory.md, fallback: main)")
     p.add_argument("--model", default=None,
@@ -2046,8 +2052,11 @@ def main(argv: list[str] | None = None) -> int:
         "history": cmd_history,
         "notify": cmd_notify,
         "study": cmd_study,
-        "deferred-remove": cmd_deferred_remove,
-        "deferred-list": cmd_deferred_list,
+        "backlog-remove": cmd_backlog_remove,
+        "deferred-remove": cmd_backlog_remove,
+        "backlog-list": cmd_backlog_list,
+        "deferred-list": cmd_backlog_list,
+        "backlog-add": cmd_backlog_add,
         "status": cmd_status,
         "research": cmd_research,
         "diff": cmd_diff,

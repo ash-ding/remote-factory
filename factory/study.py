@@ -298,18 +298,18 @@ _ANY_HEADING_RE = re.compile(r"^(?:#{1,4}\s+|\*\*[A-Z])")
 _BULLET_PREFIX_RE = re.compile(r"^[-*•]\s+")
 
 
-def _extract_deferred_bullets(content: str) -> list[str]:
-    """Extract bullet items under deferred/post-MVP headings from markdown."""
+def _extract_backlog_bullets(content: str) -> list[str]:
+    """Extract bullet items under deferred/post-MVP/backlog headings from markdown."""
     items: list[str] = []
-    in_deferred_section = False
+    in_backlog_section = False
 
     for line in content.splitlines():
         if _DEFERRED_HEADING_RE.match(line):
-            in_deferred_section = True
+            in_backlog_section = True
             continue
-        if in_deferred_section:
+        if in_backlog_section:
             if _ANY_HEADING_RE.match(line):
-                in_deferred_section = False
+                in_backlog_section = False
                 continue
             stripped = line.strip()
             m = _BULLET_PREFIX_RE.match(stripped)
@@ -321,17 +321,18 @@ def _extract_deferred_bullets(content: str) -> list[str]:
     return items
 
 
-def _parse_deferred_items(project_path: Path) -> list[str]:
-    """Extract deferred/post-MVP items, merging current.md and deferred.md.
+def _parse_backlog_items(project_path: Path) -> list[str]:
+    """Extract backlog items, merging backlog.md, deferred.md (legacy), and current.md.
 
-    Reads from both `.factory/strategy/current.md` (where Build mode writes
-    deferred sections) and `.factory/strategy/deferred.md` (the persistent
-    file that survives Strategist rewrites). Returns deduplicated items.
+    Reads from `.factory/strategy/backlog.md` (canonical), falls back to
+    `.factory/strategy/deferred.md` (legacy name), and merges items from
+    `.factory/strategy/current.md` (where Build mode writes deferred sections).
+    Returns deduplicated items.
     """
     items: list[str] = []
     seen: set[str] = set()
 
-    for filename in ("deferred.md", "current.md"):
+    for filename in ("backlog.md", "deferred.md", "current.md"):
         path = project_path / ".factory" / "strategy" / filename
         if not path.exists():
             continue
@@ -340,7 +341,7 @@ def _parse_deferred_items(project_path: Path) -> list[str]:
         except OSError:
             continue
 
-        if filename == "deferred.md":
+        if filename in ("backlog.md", "deferred.md"):
             for line in content.splitlines():
                 stripped = line.strip()
                 m = _BULLET_PREFIX_RE.match(stripped)
@@ -350,60 +351,94 @@ def _parse_deferred_items(project_path: Path) -> list[str]:
                         items.append(item_text)
                         seen.add(item_text)
         else:
-            for item_text in _extract_deferred_bullets(content):
+            for item_text in _extract_backlog_bullets(content):
                 if item_text not in seen:
                     items.append(item_text)
                     seen.add(item_text)
 
+    # Migrate: if legacy deferred.md exists but backlog.md doesn't, rename
+    legacy = project_path / ".factory" / "strategy" / "deferred.md"
+    backlog = project_path / ".factory" / "strategy" / "backlog.md"
+    if legacy.exists() and not backlog.exists():
+        legacy.rename(backlog)
+
     return items
 
 
-def _persist_deferred_items(project_path: Path, items: list[str]) -> None:
-    """Write deferred items to .factory/strategy/deferred.md.
+def _persist_backlog_items(project_path: Path, items: list[str]) -> None:
+    """Write backlog items to .factory/strategy/backlog.md.
 
     This file is the persistent canonical source — it survives Strategist
     rewrites of current.md. Items are removed when their experiment is kept.
     """
     if not items:
         return
-    deferred_path = project_path / ".factory" / "strategy" / "deferred.md"
-    deferred_path.parent.mkdir(parents=True, exist_ok=True)
+    backlog_path = project_path / ".factory" / "strategy" / "backlog.md"
+    backlog_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"- {item}" for item in items]
-    deferred_path.write_text("\n".join(lines) + "\n")
+    backlog_path.write_text("\n".join(lines) + "\n")
 
 
-def remove_deferred_item(project_path: Path, item_text: str) -> bool:
-    """Remove a completed deferred item from deferred.md by exact match.
+def remove_backlog_item(project_path: Path, item_text: str) -> bool:
+    """Remove a completed backlog item from backlog.md by exact match.
 
     Returns True if the item was found and removed, False otherwise.
+    Also checks legacy deferred.md for backward compatibility.
     """
-    deferred_path = project_path / ".factory" / "strategy" / "deferred.md"
-    if not deferred_path.exists():
-        return False
-
-    try:
-        content = deferred_path.read_text()
-    except OSError:
-        return False
-
-    remaining: list[str] = []
-    found = False
-    for line in content.splitlines():
-        stripped = line.strip()
-        m = _BULLET_PREFIX_RE.match(stripped)
-        if m and stripped[m.end():].strip() == item_text:
-            found = True
+    for filename in ("backlog.md", "deferred.md"):
+        path = project_path / ".factory" / "strategy" / filename
+        if not path.exists():
             continue
-        if stripped:
-            remaining.append(line)
 
-    if not found:
+        try:
+            content = path.read_text()
+        except OSError:
+            continue
+
+        remaining: list[str] = []
+        found = False
+        for line in content.splitlines():
+            stripped = line.strip()
+            m = _BULLET_PREFIX_RE.match(stripped)
+            if m and stripped[m.end():].strip() == item_text:
+                found = True
+                continue
+            if stripped:
+                remaining.append(line)
+
+        if not found:
+            continue
+
+        if remaining:
+            path.write_text("\n".join(remaining) + "\n")
+        else:
+            path.unlink()
+        return True
+
+    return False
+
+
+def add_backlog_item(project_path: Path, item_text: str) -> bool:
+    """Add a new item to backlog.md. Returns True if added, False if duplicate."""
+    backlog_path = project_path / ".factory" / "strategy" / "backlog.md"
+    backlog_path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing: set[str] = set()
+    if backlog_path.exists():
+        try:
+            for line in backlog_path.read_text().splitlines():
+                stripped = line.strip()
+                m = _BULLET_PREFIX_RE.match(stripped)
+                if m:
+                    existing.add(stripped[m.end():].strip())
+        except OSError:
+            pass
+
+    if item_text in existing:
         return False
 
-    if remaining:
-        deferred_path.write_text("\n".join(remaining) + "\n")
-    else:
-        deferred_path.unlink()
+    with open(backlog_path, "a") as f:
+        f.write(f"- {item_text}\n")
     return True
 
 
@@ -889,25 +924,25 @@ def study_project_local(project_path: Path, **kwargs: object) -> str:
         if not own_issues and not community_issues:
             lines.append("No open issues found (or not a GitHub repo).")
 
-    # Deferred items from Build mode
-    deferred_items = _parse_deferred_items(project_path)
-    if deferred_items:
-        _persist_deferred_items(project_path, deferred_items)
-        lines.extend([
-            "",
-            "## Deferred Items from Build Mode",
-            "",
-            "These items were explicitly deferred during Build mode. They represent "
-            "acknowledged product gaps — prioritize them over general Explore hypotheses.",
-            "",
-        ])
-        for item in deferred_items:
+    # Backlog — unified queue of features/items to build
+    backlog_items = _parse_backlog_items(project_path)
+    if backlog_items:
+        _persist_backlog_items(project_path, backlog_items)
+    lines.extend([
+        "",
+        "## Backlog",
+        "",
+    ])
+    if backlog_items:
+        lines.append(
+            f"**{len(backlog_items)} items** in the backlog. "
+            "Clear as many as possible this cycle.",
+        )
+        lines.append("")
+        for item in backlog_items:
             lines.append(f"- {item}")
-        lines.extend([
-            "",
-            "**The Strategist MUST address at least one deferred item per cycle** "
-            "when deferred items exist. Tag with: `**Deferred item:** <item>`",
-        ])
+    else:
+        lines.append("Backlog is empty. Focus on new improvements and hygiene.")
 
     # Observability coverage analysis
     from factory.discovery.introspect import _detect_language
@@ -977,7 +1012,7 @@ def study_project_local(project_path: Path, **kwargs: object) -> str:
             "Prioritize: Self-evolution, Prompt engineering, Knowledge management.",
         ])
 
-    # Hypothesis budget recommendation — structured
+    # Hypothesis budget — backlog-first
     from factory.models import HypothesisBudget
 
     config_budget = HypothesisBudget()
@@ -991,66 +1026,31 @@ def study_project_local(project_path: Path, **kwargs: object) -> str:
         except Exception:
             pass
 
-    # Only the user's own issues drive fix slot allocation
-    issue_fix_slots = len(own_issues) // 3
-    fix_slots = max(config_budget.min_fix, issue_fix_slots)
-    growth_slots = config_budget.min_growth
-    deferred_slots = min(len(deferred_items), 2) if deferred_items else 0
-    reserved = fix_slots + growth_slots + deferred_slots
-    flex_slots = max(0, min(2, config_budget.max_total - reserved))
-    total = min(reserved + flex_slots, config_budget.max_total)
-
-    budget_rows = [
-        f"| **Fix slots** | {fix_slots} | {len(own_issues)} of your issues (1 per 3, min {config_budget.min_fix}) |",
-        f"| **Growth slots** | {growth_slots} | Guaranteed minimum (configurable via factory.md) |",
-    ]
-    if deferred_slots:
-        budget_rows.append(
-            f"| **Deferred slots** | {deferred_slots} | {len(deferred_items)} deferred items from Build mode |"
-        )
-    budget_rows.extend([
-        f"| **Flex slots** | {flex_slots} | Strategist's choice (fix, growth, or deferred) |",
-        f"| **Total** | **{total}** | max {config_budget.max_total} (configurable) |",
-    ])
+    backlog_count = len(backlog_items)
 
     lines.extend([
         "",
         "## Hypothesis Budget",
         "",
-        f"**Recommended hypotheses: {total}**",
+        f"**Backlog items: {backlog_count}** (clear as many as possible this cycle)",
+        f"**New items: at most {config_budget.max_new}** (researcher/strategist may add new ideas)",
+        f"**Growth minimum: {config_budget.min_growth}** (at least {config_budget.min_growth} hypotheses must target growth dimensions)",
         "",
-        "| Slot type | Count | Source |",
-        "|-----------|-------|--------|",
-    ])
-    lines.extend(budget_rows)
-    lines.extend([
+        "### Rules",
         "",
-        "### Slot Rules",
-        "",
-        f"- **Fix slots ({fix_slots}):** Reserved for FIX/bugfix hypotheses addressing open issues or broken behavior",
-        f"- **Growth slots ({growth_slots}):** Reserved for hypotheses targeting growth dimensions "
+        "- Read the backlog first. Pick items to implement this cycle — no cap on clearing.",
+        f"- You may add at most {config_budget.max_new} NEW items that aren't already in the backlog.",
+        f"- At least {config_budget.min_growth} hypotheses must target growth dimensions "
         "(capability_surface, factory_effectiveness, research_grounding, experiment_diversity, observability). "
-        "Each MUST have a `**Growth dimension:**` tag",
-    ])
-    if deferred_slots:
-        lines.append(
-            f"- **Deferred slots ({deferred_slots}):** Reserved for hypotheses addressing deferred/post-MVP items "
-            "from Build mode. Each MUST have a `**Deferred item:**` tag. Priority: above Exploit and Explore."
-        )
-    lines.extend([
-        f"- **Flex slots ({flex_slots}):** Strategist chooses the category based on project needs",
+        "Each MUST have a `**Growth dimension:**` tag.",
+        "- FEEC ordering applies for prioritizing within the backlog (FIX > EXPLOIT > EXPLORE > COMBINE).",
+        "- Your open GitHub issues and critical bugs should be addressed as FIX hypotheses.",
+        "- Community issues (filed by others) must NOT be auto-fixed — suggest the author creates a PR instead.",
+        "- Write any new items not implemented this cycle to a `## New Backlog Items` section in current.md.",
         "",
-        "Fix, growth, and deferred slots are **reserved** — do not cannibalize one type for another.",
-        "",
-        "*Budget is configurable: set `min_growth`, `min_fix`, `max_total` in factory.md under `## Hypothesis Budget`, "
-        "or pass `--min-growth`, `--min-fix`, `--max-total` on the CLI.*",
+        "*Budget is configurable: set `min_growth`, `max_new` in factory.md under `## Hypothesis Budget`, "
+        "or pass `--min-growth`, `--max-new` on the CLI.*",
     ])
-    if own_issues:
-        lines.append("")
-        lines.append(
-            "The Strategist SHOULD address your open GitHub issues as FIX hypotheses. "
-            "Community issues (filed by others) must NOT be auto-fixed — suggest the author creates a PR instead."
-        )
 
     return "\n".join(lines)
 
