@@ -18,6 +18,9 @@ factory ceo ~/my-project
 
 # Focus — build exactly one thing
 factory ceo ~/my-project --focus "add WebSocket support"
+
+# Interactive — brainstorm and refine before building
+factory ceo "distributed eval runner" --mode interactive
 ```
 
 ## How It Works
@@ -41,7 +44,7 @@ graph LR
 
 A CEO agent orchestrates seven specialists — each running as an independent [Claude Code](https://docs.anthropic.com/en/docs/claude-code) subprocess. The Researcher searches the web and reads vault knowledge. The Strategist generates ranked hypotheses. The Builder implements one on an experiment branch. The Evaluator scores before and after. The CEO decides keep or revert. The Archivist records everything for cross-project learning.
 
-## Three Workflows
+## Workflows
 
 ### Build — start from an idea
 
@@ -69,6 +72,14 @@ factory ceo ~/my-project --focus "add authentication middleware"
 ```
 
 When you know exactly what you want, `--focus` pins a single backlog item, generates one hypothesis, runs one experiment, and exits. The entire pipeline is scoped to that single target.
+
+### Interactive — brainstorm before building
+
+```bash
+factory ceo "distributed eval runner" --mode interactive
+```
+
+Have a rough idea? Interactive mode researches the space, drafts a structured spec via the Distiller agent, and lets you iterate on it before any code is written.
 
 ## Quick Start
 

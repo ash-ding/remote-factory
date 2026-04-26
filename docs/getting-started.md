@@ -133,6 +133,25 @@ If the item isn't already in the backlog, it gets added automatically. The entir
 
 `--focus` requires the project to already be built (improve mode). It's mutually exclusive with `--loop`.
 
+## Interactive — Brainstorm Before Building
+
+When you have a rough idea but want to explore the space before committing to a design:
+
+```bash
+factory ceo "distributed eval runner" --mode interactive
+factory ceo "personal finance tracker" --mode interactive
+```
+
+Interactive mode runs a three-step loop before any code is written:
+
+1. **Research** — the Researcher surveys similar projects, tech stacks, architecture patterns, and pitfalls
+2. **Distill** — the Distiller synthesizes the research into a structured project spec (features, architecture, non-goals)
+3. **Iterate** — the CEO presents the draft to you. Give feedback, ask for changes, or request more research on a specific topic. The Distiller revises until you approve.
+
+Once you sign off, the spec is persisted and the Factory proceeds to Build mode. Phase 0 research is broad ("what should we build?"); Build mode does a second, focused research pass ("how do we build it?").
+
+`--mode interactive` is incompatible with `--headless` and `--focus`.
+
 ## Writing a `factory.md`
 
 Once the CEO creates your project, it auto-generates a `factory.md` configuration file. You can also write one manually for more control:

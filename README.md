@@ -16,6 +16,9 @@ factory ceo ~/my-project
 
 # Focus — build exactly one thing
 factory ceo ~/my-project --focus "add WebSocket support"
+
+# Interactive — brainstorm and refine before building
+factory ceo "distributed eval runner" --mode interactive
 ```
 
 The CEO runs as a foreground Claude Code session — you can talk to it at any time, just like you would with Claude Code. Ask it what it's doing, steer it if something looks off, provide missing credentials, or redirect its focus mid-cycle. It's autonomous by default, collaborative when you want it to be.
@@ -43,7 +46,7 @@ graph LR
 
 Each cycle produces a measurable, auditable experiment. The Researcher observes the project, the Strategist generates ranked hypotheses using [FEEC priority](docs/architecture.md) (Fix > Exploit > Explore > Combine), the Builder implements one on an experiment branch, the Evaluator scores before/after, and the CEO decides keep or revert. The Archivist records every outcome for cross-project learning.
 
-## Three Workflows
+## Workflows
 
 ### Build — start from an idea
 
@@ -58,9 +61,6 @@ factory ceo ~/ideas/weather-dashboard.md
 
 # Clone and improve a GitHub repo
 factory ceo https://github.com/user/repo
-
-# Brainstorm first, then build (interactive ideation)
-factory ceo "distributed eval runner" --mode interactive
 ```
 
 The input is flexible — a raw string becomes the build spec, a `.md` file is read as a detailed spec, a GitHub URL is cloned and discovered. In all cases, the Factory auto-detects the right starting point.
@@ -95,6 +95,17 @@ factory ceo ~/my-project --focus "add structured logging"
 If the item isn't already in the backlog, it gets added automatically. The Researcher scopes its research to the target, the Strategist generates exactly one hypothesis, the Builder implements it, and the cycle ends after the keep/revert decision. No other backlog items are touched.
 
 `--focus` requires the project to already be built (improve mode). It's mutually exclusive with `--loop`.
+
+### Interactive — brainstorm before building
+
+When you have a rough idea but want to explore the space first, interactive mode runs a research → brainstorm → refine loop before any code is written:
+
+```bash
+factory ceo "distributed eval runner" --mode interactive
+factory ceo "personal finance tracker" --mode interactive
+```
+
+The CEO spawns the Researcher to survey the landscape (similar projects, tech stacks, pitfalls), then the Distiller synthesizes a structured project spec. You review the draft, give feedback, and iterate until you approve — then the Factory proceeds to build it. No code is written until you sign off on the spec.
 
 ## Self-Evolving Agents
 
