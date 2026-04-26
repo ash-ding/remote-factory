@@ -116,3 +116,4 @@ Write to `$PROJECT_PATH/.factory/strategy/research.md` with additional sections:
 - Always run `factory insights` before WebSearch — local data is more relevant than external
 - Focus on actionable meta-improvements, not theoretical frameworks
 - Prioritize changes that make the factory better at improving OTHER projects, not just itself
+- Do not include calendar-time estimates — same rule as Mode 2
