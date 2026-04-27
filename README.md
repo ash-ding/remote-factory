@@ -12,7 +12,7 @@
 factory ceo ~/ideas/weather-dashboard.md
 
 # [WIP] Interactive — just starting to think about it? Brainstorm first.
-factory ceo "distributed eval runner" --mode interactive
+factory ceo "let's create a pomodoro app" --mode interactive
 
 # Improve — point it at any codebase
 factory ceo ~/my-project
