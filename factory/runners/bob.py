@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn
 
+import shutil
+
 import yaml
 
 from factory.runners._stream import should_stream, stream_subprocess
@@ -79,12 +81,12 @@ def _persist_key(project_path: Path) -> None:
         logger.warning("Failed to persist API key: %s", e)
 
 
-def _check_auth() -> None:
+def _check_auth(start_path: Path | None = None) -> None:
     """Check that BOBSHELL_API_KEY is set (once per process).
 
     Resolution order:
     1. Environment variable BOBSHELL_API_KEY
-    2. File .factory/.bob_auth (searched from cwd upward)
+    2. File .factory/.bob_auth (searched from start_path upward, or cwd if None)
 
     If found in file, injects into os.environ for subprocess inheritance.
     """
@@ -98,7 +100,8 @@ def _check_auth() -> None:
         return
 
     # Fall back to file-based persistence
-    auth_file = _find_auth_file(Path.cwd())
+    search_from = start_path if start_path is not None else Path.cwd()
+    auth_file = _find_auth_file(search_from)
     if auth_file:
         try:
             key = auth_file.read_text().strip()
@@ -116,6 +119,35 @@ def _check_auth() -> None:
 def is_dry_run() -> bool:
     """Return True if dry-run mode is enabled."""
     return os.environ.get("FACTORY_BOB_DRY_RUN", "").lower() in ("1", "true", "yes")
+
+
+def _get_bob_bin_dir() -> str | None:
+    """Find the directory containing the bob binary.
+
+    Used to prepend to PATH so that the correct Node version is found
+    when bob's shebang resolves `#!/usr/bin/env node`.
+    """
+    bob_path = shutil.which("bob")
+    if bob_path:
+        return str(Path(bob_path).parent)
+    return None
+
+
+def _make_env_with_bob_path() -> dict[str, str]:
+    """Create environment dict with bob's bin directory prepended to PATH.
+
+    Bob Shell's shebang is `#!/usr/bin/env node`. If multiple Node version
+    managers (nvm, fnm, volta) are installed, the wrong Node may be found.
+    Prepending bob's bin directory ensures its companion node is used.
+    """
+    env = dict(os.environ)
+    bob_bin_dir = _get_bob_bin_dir()
+    if bob_bin_dir:
+        current_path = env.get("PATH", "")
+        if not current_path.startswith(bob_bin_dir):
+            env["PATH"] = f"{bob_bin_dir}:{current_path}"
+            logger.debug("Prepended bob bin dir to PATH: %s", bob_bin_dir)
+    return env
 
 
 def _prompt_hash(prompt: str) -> str:
@@ -180,10 +212,14 @@ def _ensure_custom_modes(project_path: Path, role: str, prompt: str) -> None:
 def _get_chat_mode(role: str, model: str | None) -> str:
     """Determine the chat mode to use.
 
-    Always returns the role-based mode (factory-<role>).
-    The model parameter is accepted for API compatibility but not used.
+    Bob Shell only supports built-in modes: plan, code, advanced, ask.
+    Custom modes are not supported (unlike Claude Code).
+    We use 'code' mode as the most appropriate for agent work.
+
+    The role and model parameters are accepted for API compatibility
+    but not used — the agent role is injected via the prompt instead.
     """
-    return f"factory-{role}"
+    return "code"
 
 
 class BobRunner:
@@ -224,7 +260,7 @@ class BobRunner:
         if is_dry_run():
             return self._dry_run_response(role, cwd, task)
 
-        _check_auth()
+        _check_auth(cwd)
 
         try:
             check_ceilings(project_path, self.cycle_start)
@@ -232,7 +268,8 @@ class BobRunner:
             self._emit_ceiling_event(project_path, e)
             return str(e), 1
 
-        _ensure_custom_modes(project_path, role, prompt)
+        # NOTE: Custom modes are not supported in Bob Shell (unlike Claude Code).
+        # The agent role definition is injected via the prompt instead.
 
         chat_mode = _get_chat_mode(role, model)
         full_task = f"{prompt}\n\n---\n\n## Current Task\n\n{task}"
@@ -243,7 +280,7 @@ class BobRunner:
 
         logger.info("BobRunner headless: cwd=%s, role=%s, chat_mode=%s", cwd, role, chat_mode)
 
-        env = dict(os.environ)
+        env = _make_env_with_bob_path()
         start_time = time.monotonic()
 
         stream = should_stream()
@@ -307,7 +344,7 @@ class BobRunner:
             print(f"[DRY-RUN] Task: {task[:200]}...")
             raise SystemExit(0)
 
-        _check_auth()
+        _check_auth(cwd)
 
         try:
             check_ceilings(project_path, self.cycle_start)
@@ -315,19 +352,26 @@ class BobRunner:
             print(f"ERROR: {e}")
             raise SystemExit(1) from e
 
-        _ensure_custom_modes(project_path, role, prompt)
+        # NOTE: Custom modes are not supported in Bob Shell (unlike Claude Code).
+        # The agent role definition is injected via the prompt instead.
 
         chat_mode = _get_chat_mode(role, model)
+        full_task = f"{prompt}\n\n---\n\n## Current Task\n\n{task}"
 
         cmd = [
             "bob",
             f"--chat-mode={chat_mode}",
-            "-i", task,
+            "-i", full_task,
         ]
         if dangerously_skip_permissions:
             cmd.append("--yolo")
 
         logger.info("BobRunner interactive_exec: cwd=%s, chat_mode=%s", cwd, chat_mode)
+
+        # Ensure bob's bin directory is first in PATH so the correct Node is found
+        bob_bin_dir = _get_bob_bin_dir()
+        if bob_bin_dir and not os.environ.get("PATH", "").startswith(bob_bin_dir):
+            os.environ["PATH"] = f"{bob_bin_dir}:{os.environ.get('PATH', '')}"
 
         os.chdir(cwd)
         os.execvp("bob", cmd)
