@@ -773,7 +773,7 @@ class TestBobPromptCacheInvalidation:
 
         _ensure_custom_modes(tmp_path, "ceo", "You are the CEO agent.")
 
-        modes_file = tmp_path / ".bob" / "custom_modes.yaml"
+        modes_file = tmp_path / ".factory" / ".bob" / "custom_modes.yaml"
         assert modes_file.exists()
 
         data = yaml.safe_load(modes_file.read_text())
@@ -791,7 +791,7 @@ class TestBobPromptCacheInvalidation:
         prompt = "You are the CEO agent."
         _ensure_custom_modes(tmp_path, "ceo", prompt)
 
-        modes_file = tmp_path / ".bob" / "custom_modes.yaml"
+        modes_file = tmp_path / ".factory" / ".bob" / "custom_modes.yaml"
         mtime_before = modes_file.stat().st_mtime
 
         # Small delay to ensure mtime would change if file was written
@@ -813,7 +813,7 @@ class TestBobPromptCacheInvalidation:
 
         _ensure_custom_modes(tmp_path, "ceo", old_prompt)
 
-        modes_file = tmp_path / ".bob" / "custom_modes.yaml"
+        modes_file = tmp_path / ".factory" / ".bob" / "custom_modes.yaml"
         data_before = yaml.safe_load(modes_file.read_text())
         hash_before = data_before["customModes"][0]["_promptHash"]
 
@@ -833,7 +833,7 @@ class TestBobPromptCacheInvalidation:
         _ensure_custom_modes(tmp_path, "ceo", "CEO prompt")
         _ensure_custom_modes(tmp_path, "builder", "Builder prompt")
 
-        modes_file = tmp_path / ".bob" / "custom_modes.yaml"
+        modes_file = tmp_path / ".factory" / ".bob" / "custom_modes.yaml"
         data = yaml.safe_load(modes_file.read_text())
         assert len(data["customModes"]) == 2
 
