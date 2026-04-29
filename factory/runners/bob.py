@@ -151,17 +151,9 @@ def _make_env_with_bob_path() -> dict[str, str]:
     return env
 
 
-def _get_chat_mode(role: str, model: str | None) -> str:
-    """Determine the chat mode to use.
-
-    Bob Shell only supports built-in modes: plan, code, advanced, ask.
-    Custom modes are not supported (unlike Claude Code).
-    We use 'code' mode as the most appropriate for agent work.
-
-    The role and model parameters are accepted for API compatibility
-    but not used — the agent role is injected via the prompt instead.
-    """
-    return "code"
+# Bob Shell only supports built-in modes: plan, code, advanced, ask.
+# We use 'code' mode for agent work; the role is injected via the prompt.
+_BOB_CHAT_MODE = "code"
 
 
 class BobRunner:
@@ -218,7 +210,7 @@ class BobRunner:
         # NOTE: Custom modes are not supported in Bob Shell (unlike Claude Code).
         # The agent role definition is injected via the prompt instead.
 
-        chat_mode = _get_chat_mode(role, model)
+        chat_mode = _BOB_CHAT_MODE
         full_task = f"{prompt}\n\n---\n\n## Current Task\n\n{task}"
 
         cmd = ["bob", "-p", full_task, f"--chat-mode={chat_mode}"]
@@ -302,7 +294,7 @@ class BobRunner:
         # NOTE: Custom modes are not supported in Bob Shell (unlike Claude Code).
         # The agent role definition is injected via the prompt instead.
 
-        chat_mode = _get_chat_mode(role, model)
+        chat_mode = _BOB_CHAT_MODE
         full_task = f"{prompt}\n\n---\n\n## Current Task\n\n{task}"
 
         cmd = [

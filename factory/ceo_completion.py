@@ -132,8 +132,47 @@ def _count_hypotheses(project_path: Path) -> int:
     return len(matches)
 
 
-def _count_verdicts(project_path: Path) -> int:
-    """Count verdict.json files in .factory/experiments/*/."""
+def _count_verdicts(project_path: Path, since_ts: datetime | None = None) -> int:
+    """Count experiments with verdicts, optionally filtered by timestamp.
+
+    If since_ts is provided, only counts experiments created after that time.
+    This prevents counting stale experiments from previous cycles.
+
+    Reads from results.tsv for timestamp-aware counting. Falls back to counting
+    verdict.json files if results.tsv doesn't exist (backward compatibility).
+    """
+    import csv
+
+    tsv_path = project_path / ".factory" / "results.tsv"
+
+    # If results.tsv exists, use it for timestamp-aware counting
+    if tsv_path.exists():
+        count = 0
+        with open(tsv_path, newline="") as f:
+            reader = csv.DictReader(f, dialect="excel-tab")
+            for row in reader:
+                verdict = row.get("verdict", "").strip().lower()
+                if verdict not in ("keep", "revert", "error"):
+                    continue
+
+                if since_ts is not None:
+                    try:
+                        row_ts = datetime.fromisoformat(row["timestamp"])
+                        if row_ts.tzinfo is None:
+                            row_ts = row_ts.replace(tzinfo=timezone.utc)
+                        since_ts_tz = since_ts
+                        if since_ts_tz.tzinfo is None:
+                            since_ts_tz = since_ts_tz.replace(tzinfo=timezone.utc)
+                        if row_ts < since_ts_tz:
+                            continue
+                    except (KeyError, ValueError):
+                        continue
+
+                count += 1
+        return count
+
+    # Fallback: count verdict.json files (no timestamp filtering possible)
+    # This path is used when results.tsv doesn't exist yet (e.g., fresh projects, tests)
     experiments_dir = project_path / ".factory" / "experiments"
     if not experiments_dir.exists():
         return 0
@@ -165,14 +204,22 @@ def _has_aborted(project_path: Path, since_ts: str | None = None) -> bool:
     return False
 
 
-def _detect_incomplete(project_path: Path, mode: str) -> IncompleteGap | None:
+def _detect_incomplete(
+    project_path: Path, mode: str, cycle_started_at: datetime | None = None
+) -> IncompleteGap | None:
     """Detect if the cycle is incomplete for the given mode.
 
     Returns IncompleteGap if work is incomplete, None if complete.
+
+    Args:
+        project_path: Path to the project.
+        mode: CEO mode (improve, build, discover, meta).
+        cycle_started_at: If provided, only counts experiments created after this time.
+            This prevents counting stale experiments from previous cycles.
     """
     if mode in ("improve", "meta"):
         planned = _count_hypotheses(project_path)
-        completed = _count_verdicts(project_path)
+        completed = _count_verdicts(project_path, since_ts=cycle_started_at)
 
         if planned == 0:
             # No strategy yet — not an incomplete improve cycle, probably discover mode
@@ -205,7 +252,7 @@ def _detect_incomplete(project_path: Path, mode: str) -> IncompleteGap | None:
         # For build mode, check if Builder completed at least one hypothesis
         # In build mode, the strategy file should have phases marked as hypotheses
         planned = _count_hypotheses(project_path)
-        completed = _count_verdicts(project_path)
+        completed = _count_verdicts(project_path, since_ts=cycle_started_at)
 
         if planned == 0:
             # No strategy means we're in scaffold phase — check for eval profile
@@ -404,13 +451,14 @@ async def run_ceo_with_completion_guard(
             return result, code
 
         # Explicit ABORT — respect it and clean up cycle state
-        if _has_aborted(project_path):
+        # Pass cycle start time to filter out stale abort events from previous cycles
+        if _has_aborted(project_path, since_ts=cycle_state.started_at.isoformat()):
             log.info("ceo_aborted", reason="cycle.aborted event found")
             delete_cycle_state(project_path)
             return result, code
 
-        # Check for incomplete work
-        gap = _detect_incomplete(project_path, mode)
+        # Check for incomplete work — pass cycle start time to filter stale experiments
+        gap = _detect_incomplete(project_path, mode, cycle_started_at=cycle_state.started_at)
         if gap is None:
             log.info("ceo_complete", attempt=attempt)
             # Cycle complete — delete cycle state so next invocation starts fresh

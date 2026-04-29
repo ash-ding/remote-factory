@@ -97,8 +97,8 @@ The factory supports multiple CLI backends via the runner abstraction (`factory/
 
 **Bob Shell specifics:**
 - Requires `BOBSHELL_API_KEY` environment variable to be set
-- Uses custom modes (`.bob/custom_modes.yaml`) to inject agent role definitions
-- Model selection is handled via `--chat-mode` instead of `--model`
+- Uses 'code' mode; agent role definitions are injected via the prompt
+- Model selection is not configurable (Bob Shell uses its default model)
 
 **Dry-run mode:** Set `FACTORY_BOB_DRY_RUN=1` to test Bob Shell integration without spending tokens. The factory returns stub responses and logs usage. This is automatically set in tests via `tests/conftest.py`.
 
