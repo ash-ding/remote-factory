@@ -1199,7 +1199,10 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     # Interactive foreground mode: use runner's interactive_exec
     prompt = resolve_prompt("ceo", project_path)
     runner = get_runner(runner_name)
-    runner.interactive_exec(prompt, task, project_path, model=model, role="ceo")
+    runner.interactive_exec(
+        prompt, task, project_path,
+        model=model, role="ceo", dangerously_skip_permissions=True
+    )
 
 
 def _is_github_url(path: str) -> bool:
