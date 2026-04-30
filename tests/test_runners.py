@@ -915,3 +915,138 @@ class TestStreamingOutput:
                 assert "Line 1" in content
                 assert "Line 2" in content
                 assert "Line 3" in content
+
+
+class TestCeilingAccumulationAcrossInvocations:
+    """Tests that per-cycle ceiling accumulates across invoke_agent calls."""
+
+    async def test_ceiling_accumulates_across_invoke_agent_calls(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify that invocation counts accumulate across multiple invoke_agent calls.
+
+        This test reproduces the bug from PR #136: each get_runner() call created
+        a fresh BobRunner with cycle_start=now(), so the ceiling never accumulated.
+
+        With the fix, get_runner() passes project_path to BobRunner, which reads
+        started_at from .factory/state/cycle.json, ensuring all invocations within
+        a cycle share the same cycle_start and accumulate correctly.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from factory.agents.runner import invoke_agent
+        from factory.ceo_completion import write_cycle_state, create_cycle_state
+
+        monkeypatch.setenv("FACTORY_RUNNER", "bob")
+        monkeypatch.setenv("BOBSHELL_API_KEY", "test-key")
+        monkeypatch.delenv("FACTORY_BOB_DRY_RUN", raising=False)
+        monkeypatch.setenv("FACTORY_BOB_MAX_INVOCATIONS_PER_CYCLE", "2")
+
+        # Reset auth check state
+        import factory.runners.bob as bob_module
+        bob_module._auth_checked = False
+
+        # Create project structure
+        (tmp_path / ".factory").mkdir()
+        (tmp_path / ".factory" / "state").mkdir()
+
+        # Create a cycle state (simulates an in-flight cycle)
+        cycle_state = create_cycle_state("improve", "test task", "bob")
+        write_cycle_state(tmp_path, cycle_state)
+
+        # Create a minimal agent prompt
+        prompts_dir = tmp_path / ".factory" / "agents"
+        prompts_dir.mkdir()
+        (prompts_dir / "researcher.md").write_text("You are a researcher.")
+
+        # Mock subprocess to avoid actually calling bob
+        with patch(
+            "factory.runners.bob.stream_subprocess", new_callable=AsyncMock
+        ) as mock_stream:
+            mock_stream.return_value = (b"output", b"")
+
+            with patch(
+                "asyncio.create_subprocess_exec", new_callable=AsyncMock
+            ) as mock_exec:
+                mock_proc = AsyncMock()
+                mock_proc.returncode = 0
+                mock_exec.return_value = mock_proc
+
+                # First invocation — should succeed (1/2)
+                stdout1, code1 = await invoke_agent(
+                    "researcher",
+                    "First task",
+                    tmp_path,
+                    runner_name="bob",
+                )
+                assert code1 == 0, f"First invocation failed: {stdout1}"
+
+                # Second invocation — should succeed (2/2)
+                stdout2, code2 = await invoke_agent(
+                    "researcher",
+                    "Second task",
+                    tmp_path,
+                    runner_name="bob",
+                )
+                assert code2 == 0, f"Second invocation failed: {stdout2}"
+
+                # Third invocation — should fail (3/2 = ceiling exceeded)
+                stdout3, code3 = await invoke_agent(
+                    "researcher",
+                    "Third task",
+                    tmp_path,
+                    runner_name="bob",
+                )
+                assert code3 == 1, "Third invocation should have hit the ceiling"
+                assert "ceiling" in stdout3.lower() or "exceeded" in stdout3.lower()
+
+        bob_module._auth_checked = False
+
+    async def test_bobrunner_reads_cycle_start_from_cycle_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify BobRunner reads started_at from cycle.json when project_path is provided."""
+
+        from factory.ceo_completion import write_cycle_state, create_cycle_state
+        from factory.runners import get_runner
+
+        monkeypatch.setenv("FACTORY_BOB_DRY_RUN", "1")
+
+        # Create project structure
+        (tmp_path / ".factory").mkdir()
+        (tmp_path / ".factory" / "state").mkdir()
+
+        # Create a cycle state with a known started_at
+        cycle_state = create_cycle_state("improve", "test task", "bob")
+        write_cycle_state(tmp_path, cycle_state)
+
+        # Get runner with project_path
+        runner = get_runner("bob", project_path=tmp_path)
+
+        # Runner's cycle_start should match the persisted state's started_at
+        # (allowing for small time differences in serialization)
+        time_diff = abs((runner.cycle_start - cycle_state.started_at).total_seconds())
+        assert time_diff < 1.0, f"cycle_start mismatch: {runner.cycle_start} vs {cycle_state.started_at}"
+
+    async def test_bobrunner_falls_back_to_now_without_cycle_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify BobRunner falls back to now() when no cycle.json exists."""
+        from datetime import datetime, timezone
+
+        from factory.runners import get_runner
+
+        monkeypatch.setenv("FACTORY_BOB_DRY_RUN", "1")
+
+        # Create project structure but NO cycle.json
+        (tmp_path / ".factory").mkdir()
+
+        now_before = datetime.now(timezone.utc)
+
+        # Get runner with project_path (but no cycle.json exists)
+        runner = get_runner("bob", project_path=tmp_path)
+
+        now_after = datetime.now(timezone.utc)
+
+        # Runner's cycle_start should be between now_before and now_after
+        assert now_before <= runner.cycle_start <= now_after
