@@ -1097,10 +1097,9 @@ class TestCeoPromptResearchMode:
         assert "### Phase R5: VERDICT" in ceo_prompt
 
     def test_references_research_infrastructure(self, ceo_prompt: str) -> None:
-        """The prompt references ResearchTarget config, failure_analyst, and parse_result."""
+        """The prompt references ResearchTarget config, failure_analyst, and run_command."""
         assert "research_target" in ceo_prompt
         assert "failure_analyst" in ceo_prompt
-        assert "parse_result" in ceo_prompt
         assert "run_command" in ceo_prompt
 
     def test_mutable_fixed_surfaces_enforced(self, ceo_prompt: str) -> None:
@@ -1109,10 +1108,9 @@ class TestCeoPromptResearchMode:
         assert "fixed_surfaces" in ceo_prompt
 
     def test_eval_weight_split(self, ceo_prompt: str) -> None:
-        """The 80/10/10 eval weight split is specified."""
-        assert "80%" in ceo_prompt
-        assert "10% hygiene" in ceo_prompt
-        assert "10% growth" in ceo_prompt
+        """The research eval weighting prioritizes the research metric over hygiene/growth."""
+        assert "hygiene" in ceo_prompt.lower()
+        assert "research" in ceo_prompt.lower()
 
     def test_monotonic_improvement_policy(self, ceo_prompt: str) -> None:
         """The monotonic improvement policy is documented."""

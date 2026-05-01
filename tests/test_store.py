@@ -352,3 +352,43 @@ class TestReparseResearchTarget:
         assert config.fixed_surfaces == []
         assert config.research_constraints == []
         assert config.cost_budget is None
+
+    async def test_case_insensitive_research_keys(self, store):
+        """Keys like 'objective' and 'Objective' should both work."""
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nResearch\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n\n"
+            "## Research Target\n"
+            "- objective: Minimize loss\n"
+            "- metric: val_loss\n"
+            "- target: 0.01\n"
+            "- run command: python train.py\n"
+            "- result path: metrics.json\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.research_target is not None
+        assert config.research_target.objective == "Minimize loss"
+        assert config.research_target.run_command == "python train.py"
+
+    async def test_incomplete_research_target_returns_none(self, store):
+        """Missing required fields should produce None, not crash."""
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nResearch\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n\n"
+            "## Research Target\n"
+            "- Objective: Minimize loss\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.research_target is None

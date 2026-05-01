@@ -1250,15 +1250,25 @@ cd "$PROJECT_PATH" && git add .factory/ && git commit -m "factory: log experimen
 
 The research evolution loop. You orchestrate specialist agents through a systematic 6-phase cycle to improve a measurable research target (e.g., benchmark accuracy, resolve rate) through iterative failure analysis and targeted fixes.
 
-**When to enter:** The factory config (`.factory/config.json`) has a non-null `research_target` field, AND the mode is set to `research` (via `--mode research` or cycle state).
+**When to enter:** The factory config (`.factory/config.json`) has a non-null `research_target` field. Auto-detected by the CLI when `research_target` is present — no need for explicit `--mode research`.
 
 **Key differences from Improve mode:**
 - Uses `run_command` (from `ResearchTarget` config) instead of `eval_command` for the primary measurement
 - Failure Analyst agent replaces standard observations — produces structured failure analysis instead of general observations
 - Mutable/fixed surface constraints are enforced: Builder MUST only modify files in `mutable_surfaces`, MUST NOT touch `fixed_surfaces`
-- Eval weight override: 80% research target improvement, 10% hygiene (gate only), 10% growth
+- The primary keep/revert decision is driven by the research target metric; hygiene is a hard gate (any regression → automatic revert)
 - The experiment IS the eval — the `run_command` produces the target metric
-- Monotonic improvement policy: the target metric must never regress below the previous best
+- Monotonic improvement policy: the aggregate target metric must never regress below the previous best
+
+### Variable Definitions
+
+Before starting the cycle, establish these variables that are referenced throughout:
+
+- `$CYCLE_ID`: Format `cycle-NNN` where NNN is a zero-padded counter (e.g., `cycle-001`). For the baseline run, use `000-baseline`. Derive by counting existing directories in `.factory/research/runs/`.
+- `$RUN_TIMEOUT`: Read from `research_target.timeout` in `.factory/config.json` (default: 3600).
+- `$MUTABLE_SURFACES`: Read `mutable_surfaces` array from `.factory/config.json`, join with newlines.
+- `$FIXED_SURFACES`: Read `fixed_surfaces` array from `.factory/config.json`, join with newlines.
+- `$RESEARCH_CONSTRAINTS`: Read `research_constraints` array from `.factory/config.json`, join with newlines.
 
 ### Phase R0: BASELINE
 
@@ -1278,19 +1288,21 @@ Establish the starting point by running the system and recording the baseline me
    - `fixed_surfaces`: files the Builder MUST NOT modify (eval infrastructure, test data, ground truth)
    - `research_constraints`: additional free-text constraints
 
-3. **Execute the baseline run:**
-   ```bash
-   # The run_command is executed as a subprocess by the research runner
-   # Results are stored to .factory/research/runs/000-baseline/
-   ```
-   The CEO does NOT run the command directly. Instead, instruct the Evaluator agent to execute the run and report results:
+3. **Execute the baseline run.** The Evaluator agent runs the shell command directly and manages artifacts:
 
    ```bash
    factory agent evaluator --task "Run research baseline for $PROJECT_PATH.
-   Execute the run_command from .factory/config.json research_target field.
-   Store results to .factory/research/runs/000-baseline/.
-   Parse the target metric using parse_result() from the result file.
-   Report: metric name, metric value, run status, duration." --project "$PROJECT_PATH" --timeout $RUN_TIMEOUT
+
+   1. Read .factory/config.json and extract research_target fields
+   2. mkdir -p .factory/research/runs/000-baseline
+   3. cd $PROJECT_PATH && $RUN_COMMAND
+   4. Read the result file at $RESULT_PATH
+   5. Extract the metric '$METRIC' from the JSON (use dotted paths for nested keys, slash for ratios like 'resolved/total')
+   6. Write .factory/research/runs/000-baseline/summary.json with format:
+      {\"status\": \"PASS\", \"metric\": \"$METRIC\", \"metric_value\": <extracted value>, \"duration_seconds\": <elapsed>, \"command\": \"$RUN_COMMAND\"}
+   7. Copy stdout to .factory/research/runs/000-baseline/stdout.log
+   8. Copy stderr to .factory/research/runs/000-baseline/stderr.log
+   9. Report: metric name, metric value, run status, duration." --project "$PROJECT_PATH" --timeout $RUN_TIMEOUT
    ```
 
 4. **Record baseline metric.** Save the metric value as `$BASELINE_METRIC`. If this is not the first cycle, read previous best from `.factory/research/runs/` summaries and set `$PREVIOUS_BEST`.
@@ -1301,9 +1313,15 @@ Establish the starting point by running the system and recording the baseline me
    ```
    If prior runs exist, the previous best metric is the highest metric value across all prior run summaries. Read each `summary.json` to find it.
 
+Save crash-recovery checkpoint:
+```bash
+factory checkpoint "$PROJECT_PATH" --save --mode research \
+  --completed "baseline" --pending "failure_analyst,strategist,builder,evaluator,archivist"
+```
+
 ### Phase R1: ANALYZE (Failure Analyst Agent)
 
-Spawn the Failure Analyst to classify failures from the baseline run.
+Spawn the Failure Analyst to classify failures from the baseline run. Read `.factory/config.json` to get the mutable surfaces list, then pass it inline.
 
 ```bash
 factory agent failure_analyst --task "Analyze research run results for $PROJECT_PATH.
@@ -1313,12 +1331,11 @@ Read the research target config from .factory/config.json (objective, metric, ta
 The current metric value is $CURRENT_METRIC (target: $TARGET).
 
 Mutable surfaces (files that CAN be changed):
-$(cat .factory/config.json | python3 -c 'import sys,json; print(chr(10).join(json.load(sys.stdin).get(\"mutable_surfaces\",[])))')
+$MUTABLE_SURFACES
 
-Prior run summaries for comparison:
-$(for d in .factory/research/runs/*/; do cat \"\$d/summary.json\" 2>/dev/null; done)
+Read prior run summaries for comparison from .factory/research/runs/*/summary.json.
 
-Produce failure_analysis.md in the run directory." --project "$PROJECT_PATH" --timeout 300
+Produce failure_analysis.md in the run directory AND print a summary to stdout." --project "$PROJECT_PATH" --timeout 300
 ```
 
 **R1-review: CEO Review — Failure Analysis**
@@ -1342,6 +1359,12 @@ Then write checkpoint:
 echo "- [x] archivist after failure analysis — $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$PROJECT_PATH/.factory/reviews/archivist-checkpoints.md"
 ```
 
+Save crash-recovery checkpoint:
+```bash
+factory checkpoint "$PROJECT_PATH" --save --mode research \
+  --completed "baseline,failure_analyst" --pending "strategist,builder,evaluator,archivist"
+```
+
 ### Phase R2: HYPOTHESIZE (Strategist Agent)
 
 Spawn the Strategist with failure analysis context to generate targeted hypotheses.
@@ -1361,7 +1384,7 @@ Current metric: $CURRENT_METRIC (target: $TARGET, previous best: $PREVIOUS_BEST)
 - Hypotheses MUST NOT modify files in fixed_surfaces: $FIXED_SURFACES
 - Additional constraints: $RESEARCH_CONSTRAINTS
 
-Generate hypotheses that target the dominant failure modes identified by the Failure Analyst.
+Generate 1-3 hypotheses that target the dominant failure modes identified by the Failure Analyst.
 Prioritize by expected impact on the target metric.
 Each hypothesis must name specific files from mutable_surfaces to modify.
 
@@ -1382,9 +1405,10 @@ This is a **hard gate**. The Builder MUST NOT start until you approve.
    - No hypothesis proposes changes to eval infrastructure, test data, or ground truth
 3. Verify hypotheses target the dominant failure modes from the Failure Analyst's report
 4. Verify expected impact is realistic given the failure distribution
-5. Write verdict to `.factory/reviews/ceo-verdict-strategist.md`
-6. If REDIRECT: re-invoke with corrections (e.g., "H2 targets a fixed surface", "No hypothesis addresses the dominant failure mode")
-7. If PROCEED: write `PLAN APPROVED`
+5. **Hypothesis count check:** Research mode should have 1-3 hypotheses. More than 3 → REDIRECT.
+6. Write verdict to `.factory/reviews/ceo-verdict-strategist.md`
+7. If REDIRECT: re-invoke with corrections (e.g., "H2 targets a fixed surface", "No hypothesis addresses the dominant failure mode")
+8. If PROCEED: write `PLAN APPROVED`
 
 **MANDATORY Archivist — record strategy (DO NOT SKIP):**
 
@@ -1399,16 +1423,54 @@ Then write checkpoint:
 echo "- [x] archivist after strategy — $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$PROJECT_PATH/.factory/reviews/archivist-checkpoints.md"
 ```
 
+Save crash-recovery checkpoint:
+```bash
+factory checkpoint "$PROJECT_PATH" --save --mode research \
+  --completed "baseline,failure_analyst,strategist" --pending "builder,evaluator,archivist"
+```
+
 ### Phase R3: IMPLEMENT (Builder Agent — per hypothesis)
 
 For each approved hypothesis, sequentially:
 
-```bash
-factory agent builder --task "Implement research hypothesis for $PROJECT_PATH.
+#### R3a. Begin Experiment and Create Issue
 
-Read the issue: gh issue view $ISSUE_NUM
-Read CLAUDE.md and factory.md.
-Read the CEO-approved strategy at .factory/reviews/ceo-verdict-strategist.md.
+```bash
+uv run python -m factory begin "$PROJECT_PATH" --hypothesis "<hypothesis text>"
+```
+
+Save the printed experiment ID as `$EXP_ID`.
+
+```bash
+gh issue create \
+    --title "<hypothesis title>" \
+    --body "Factory experiment $EXP_ID (research mode). Hypothesis: <text>
+
+## What to Build
+<specific changes within mutable surfaces>
+
+## Surface Constraints
+- Mutable: $MUTABLE_SURFACES
+- Fixed (DO NOT TOUCH): $FIXED_SURFACES
+
+## Acceptance Criteria
+- [ ] Changes stay within mutable surfaces
+- [ ] Tests pass
+- [ ] No hygiene regression"
+```
+
+Save issue number as `$ISSUE_NUM`.
+
+#### R3b. Implement
+
+```bash
+factory agent builder --task "Implement GitHub issue #$ISSUE_NUM in <owner>/<repo>.
+
+1. Read the issue: gh issue view $ISSUE_NUM
+2. cd $PROJECT_PATH, read CLAUDE.md and factory.md
+3. Read the CEO-approved strategy at .factory/reviews/ceo-verdict-strategist.md
+4. git checkout -b experiment/$EXP_ID-$SHORT_DESCRIPTION
+5. Implement exactly what the hypothesis describes
 
 ## Surface Constraints — CRITICAL
 You MUST only modify files in mutable_surfaces:
@@ -1419,9 +1481,8 @@ $FIXED_SURFACES
 
 Violation of surface constraints is an automatic revert — no exceptions.
 
-Implement exactly what the hypothesis describes.
-Run tests after implementation.
-Commit and open PR targeting $TARGET_BRANCH." --project "$PROJECT_PATH" --timeout 600
+6. Run tests after implementation
+7. Commit and open PR targeting $TARGET_BRANCH" --project "$PROJECT_PATH" --timeout 600
 ```
 
 **R3-review: CEO Review — Builder PR**
@@ -1440,7 +1501,7 @@ Apply the standard CEO Review Gate (same as Improve mode 2d-review), with one ad
 **MANDATORY Archivist — record build (DO NOT SKIP):**
 
 ```bash
-factory agent archivist --task "Record the Builder's work for research experiment.
+factory agent archivist --task "Record the Builder's work for research experiment $EXP_ID.
 Read .factory/reviews/ceo-verdict-builder.md and the PR diff.
 Write implementation notes to the vault." --project "$PROJECT_PATH"
 ```
@@ -1452,62 +1513,75 @@ echo "- [x] archivist after build — $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$PROJE
 
 ### Phase R4: RUN
 
-Execute the `run_command` again on the modified code and compare against baseline.
+Execute the `run_command` again on the modified code (PR branch) and compare against baseline.
 
 ```bash
 factory agent evaluator --task "Run research post-change eval for $PROJECT_PATH.
-Execute the run_command from .factory/config.json research_target field on the PR branch.
-Store results to .factory/research/runs/$CYCLE_ID/.
-Parse the target metric.
-Compare against baseline: $BASELINE_METRIC and previous best: $PREVIOUS_BEST.
-Report: metric before, metric after, delta, whether target is met." --project "$PROJECT_PATH" --timeout $RUN_TIMEOUT
+
+1. Read .factory/config.json and extract research_target fields
+2. mkdir -p .factory/research/runs/$CYCLE_ID
+3. cd $PROJECT_PATH && $RUN_COMMAND
+4. Read the result file at $RESULT_PATH
+5. Extract the metric '$METRIC' from the JSON
+6. Write .factory/research/runs/$CYCLE_ID/summary.json with format:
+   {\"status\": \"PASS\", \"metric\": \"$METRIC\", \"metric_value\": <extracted value>, \"duration_seconds\": <elapsed>, \"command\": \"$RUN_COMMAND\"}
+7. Copy stdout/stderr to .factory/research/runs/$CYCLE_ID/
+8. Compare against baseline: $BASELINE_METRIC and previous best: $PREVIOUS_BEST
+9. Report: metric before, metric after, delta, whether target is met." --project "$PROJECT_PATH" --timeout $RUN_TIMEOUT
 ```
 
 Save the new metric value as `$METRIC_AFTER`.
 
 ### Phase R5: VERDICT
 
-The verdict decision uses a different weight distribution and stricter monotonic policy than Improve mode.
+The verdict decision is driven by the research target metric, with hygiene as a hard gate.
 
-**Eval weight override:** 80% research target improvement, 10% hygiene (gate only), 10% growth.
-
-The primary decision is driven by the research target metric, but hygiene is a hard gate — any hygiene regression is an automatic revert regardless of research target improvement.
+**Decision priority:** The research target metric is the primary signal. The standard `factory eval` composite score is used only as a hygiene gate — any regression in hygiene dimensions (tests, lint, type_check) is an automatic revert, but the composite score is NOT the primary keep/revert criterion. The research metric is.
 
 #### R5a. Hygiene Gate (NON-OVERRIDABLE)
 
 Run the standard eval to check hygiene dimensions:
 
 ```bash
-factory agent evaluator --task "Run hygiene eval for $PROJECT_PATH.
-Execute: uv run python -m factory eval $PROJECT_PATH
-Report composite score and per-dimension breakdown.
-Compare against baseline score: $SCORE_BEFORE.
-Flag ANY dimension that regressed." --project "$PROJECT_PATH"
+uv run python -m factory eval "$PROJECT_PATH"
 ```
 
-**If ANY hygiene dimension regresses:** mandatory revert, even if the research target improved. Hygiene is a gate, not a tradeoff.
+Read the JSON output and compare each hygiene dimension (tests, lint, type_check, coverage) against the baseline scores captured before the experiment. **If ANY hygiene dimension regresses:** mandatory revert, even if the research target improved. Hygiene is a gate, not a tradeoff.
 
 #### R5b. Monotonic Improvement Check
 
 The research target metric must satisfy the **monotonic improvement policy:**
 
-1. `$METRIC_AFTER >= $PREVIOUS_BEST` — the metric must not regress below the previous best
-2. No regression on previously-solved instances — if an instance was solved in a prior run and is now unsolved, that counts as a regression even if the aggregate metric improved
+1. `$METRIC_AFTER >= $PREVIOUS_BEST` — the aggregate metric must not regress below the previous best
+2. **V2 (not yet implemented):** Per-instance regression tracking. For V1, only the aggregate metric is checked. If per-instance result files are available, the CEO SHOULD manually spot-check a sample of previously-solved instances, but this is advisory, not a hard gate.
 
-**If monotonic check fails:** revert. Record the specific regressions in the verdict notes.
+**If monotonic check fails:** revert. Record the regression in the verdict notes.
 
-#### R5c. Keep/Revert Decision
+#### R5c. Precheck Gate
+
+Run the standard precheck (same as Improve mode):
+
+```bash
+BASELINE_SHA=$(cd "$PROJECT_PATH" && git log --format=%H -1 $TARGET_BRANCH)
+uv run python -m factory precheck "$PROJECT_PATH" \
+    --score-before $SCORE_BEFORE \
+    --score-after $SCORE_AFTER \
+    --hypothesis "$HYPOTHESIS" \
+    --baseline $BASELINE_SHA
+```
+
+If precheck fails → mandatory revert.
+
+#### R5d. Keep/Revert Decision
 
 **KEEP if ALL of the following are true:**
 - Research target metric improved or held steady (`$METRIC_AFTER >= $PREVIOUS_BEST`)
 - No hygiene regression
-- No regression on previously-solved instances
-- Precheck gate passes (run standard `factory precheck` as in Improve mode)
+- Precheck gate passes
 
 **REVERT if ANY of the following are true:**
 - Research target metric regressed
 - Any hygiene dimension regressed
-- Previously-solved instances regressed
 - Precheck gate fails
 
 **If KEEP:**
@@ -1556,14 +1630,13 @@ uv run python -m factory finalize "$PROJECT_PATH" \
     --notes "ceo:revert mode=research reason=$REVERT_REASON metric=$METRIC before=$BASELINE_METRIC after=$METRIC_AFTER hygiene=$HYGIENE_STATUS monotonic=$MONOTONIC_STATUS"
 ```
 
-#### R5d. Termination Conditions
+#### R5e. Termination Conditions
 
 After each hypothesis verdict, check whether the research cycle should terminate:
 
 1. **Target met:** `$METRIC_AFTER >= $TARGET` → cycle complete. Record success and proceed to Final Archive.
 2. **Budget exhausted:** if `cost_budget` is configured in `.factory/config.json` and the total cost exceeds `max_per_cycle` → cycle complete. Record budget exhaustion.
-3. **Max cycles exceeded:** if the number of experiments in this cycle exceeds the hypothesis count → cycle complete.
-4. **All hypotheses processed:** all approved hypotheses have verdicts → cycle complete (standard completion).
+3. **All hypotheses processed:** all approved hypotheses have verdicts → cycle complete (standard completion).
 
 If none of the above: continue to the next hypothesis (loop back to R3).
 
@@ -1579,6 +1652,25 @@ Then write checkpoint:
 ```bash
 echo "- [x] archivist after research experiment $EXP_ID ($VERDICT) — $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$PROJECT_PATH/.factory/reviews/archivist-checkpoints.md"
 ```
+
+Save crash-recovery checkpoint:
+```bash
+factory checkpoint "$PROJECT_PATH" --save --mode research \
+  --completed "baseline,failure_analyst,strategist" --pending "builder,evaluator,archivist" \
+  --experiment $EXP_ID --completed-hypotheses "$COMPLETED_EXP_IDS"
+```
+
+### Research Mode Error Recovery
+
+**Run command fails (non-zero exit):** The Evaluator should still save stdout/stderr/summary.json with `status: "FAIL"`. The CEO reads the summary, decides whether to revert or debug. If the failure is in the system under test (expected), proceed to Failure Analyst. If the failure is environmental (missing dependency, permission denied), fix and retry.
+
+**Run command times out:** Summary status is `"TIMEOUT"`. Check if the timeout is too low (increase `research_target.timeout` in factory.md). If the system is genuinely hanging, revert the change and finalize as error.
+
+**Result file missing or unparseable:** Summary status is `"ERROR"`. Check `result_path` in config — is it correct? Did the run command write to a different location? Fix config and retry.
+
+**Failure Analyst produces empty/irrelevant analysis:** REDIRECT with specific guidance: "Read the stdout.log and stderr.log in the run directory. Classify each instance's outcome."
+
+**Builder modifies fixed surfaces:** ABORT immediately. Close PR, revert, finalize as error with `notes="ceo:revert reason=fixed_surface_violation"`.
 
 ### Final Archive and Notify
 

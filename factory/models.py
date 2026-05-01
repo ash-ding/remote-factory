@@ -68,7 +68,7 @@ class ResearchTarget(BaseModel):
     target: float
     run_command: str
     result_path: str
-    result_parser: str = "json"
+    result_parser: Literal["json"] = "json"
     timeout: int = 3600
 
 

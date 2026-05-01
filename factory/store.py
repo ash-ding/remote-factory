@@ -44,7 +44,7 @@ def _parse_kv_list(
         s = str(item)
         if ":" in s:
             key, val = s.split(":", 1)
-            key = key.strip()
+            key = key.strip().lower().replace(" ", "_")
             try:
                 result[key] = value_type(val.strip())  # type: ignore[call-arg]
             except (ValueError, TypeError):
@@ -88,21 +88,20 @@ def _parse_research_target(items: str | list[str] | float) -> ResearchTarget | N
     kv = _parse_kv_list(items, str)
     if not kv:
         return None
-    objective = str(kv.get("Objective", ""))
-    metric = str(kv.get("Metric", ""))
-    run_command = str(kv.get("Run Command", ""))
-    result_path = str(kv.get("Result Path", ""))
+    objective = str(kv.get("objective", ""))
+    metric = str(kv.get("metric", ""))
+    run_command = str(kv.get("run_command", ""))
+    result_path = str(kv.get("result_path", ""))
     if not objective or not metric or not run_command or not result_path:
-        log.debug("research_target_incomplete", keys=list(kv.keys()))
+        log.warning("research_target_incomplete", keys=list(kv.keys()))
         return None
     rt = ResearchTarget(
         objective=objective,
         metric=metric,
-        target=float(str(kv.get("Target", "0.0"))),
+        target=float(str(kv.get("target", "0.0"))),
         run_command=run_command,
         result_path=result_path,
-        result_parser=str(kv.get("Result Parser", "json")),
-        timeout=int(float(str(kv.get("Timeout", "3600")))),
+        timeout=int(float(str(kv.get("timeout", "3600")))),
     )
     log.debug("research_target_parsed", metric=metric, target=rt.target)
     return rt
@@ -114,8 +113,8 @@ def _parse_cost_budget(items: str | list[str] | float) -> CostBudgetConfig | Non
     if not kv:
         return None
     budget = CostBudgetConfig(
-        max_per_cycle=float(str(kv["Max per cycle"])) if "Max per cycle" in kv else None,
-        max_total=float(str(kv["Max total"])) if "Max total" in kv else None,
+        max_per_cycle=float(str(kv["max_per_cycle"])) if "max_per_cycle" in kv else None,
+        max_total=float(str(kv["max_total"])) if "max_total" in kv else None,
     )
     log.debug("cost_budget_parsed", max_per_cycle=budget.max_per_cycle, max_total=budget.max_total)
     return budget

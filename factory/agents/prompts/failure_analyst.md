@@ -61,7 +61,9 @@ Cycle Comparison (<previous> → <current>):
 
 ## Output
 
-Write your analysis to `.factory/research/runs/<cycle>/failure_analysis.md` with the following structure:
+Write your analysis to `.factory/research/runs/<cycle>/failure_analysis.md` AND print a summary to stdout (the CEO reviews your stdout output at `.factory/reviews/failure_analyst-latest.md`). Your stdout should include at minimum: the summary section, failure distribution, and recommended interventions. The full per-instance detail goes in the file.
+
+Structure of `failure_analysis.md`:
 
 ```markdown
 # Failure Analysis — Cycle <N>

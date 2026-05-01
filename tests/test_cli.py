@@ -95,6 +95,11 @@ class TestParser:
         args = parser.parse_args(["agent", "distiller", "--task", "test", "--project", "/p"])
         assert args.role == "distiller"
 
+    def test_ceo_agent_failure_analyst_choice(self):
+        parser = build_parser()
+        args = parser.parse_args(["agent", "failure_analyst", "--task", "test", "--project", "/p"])
+        assert args.role == "failure_analyst"
+
 
 class TestCmdCeoInteractive:
     def test_interactive_headless_incompatible(self, capsys):

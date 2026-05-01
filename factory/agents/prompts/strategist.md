@@ -320,17 +320,25 @@ When the project has user-defined eval dimensions (configured in `factory.md` `#
 
 ## Research Mode Context
 
-When operating in **research mode**, the Strategist receives failure analysis from the Failure Analyst instead of standard observations. The failure analysis lives at `.factory/research/runs/<cycle>/failure_analysis.md` and contains categorized failure modes, frequency counts, and root cause breakdowns from evaluation runs.
+When operating in **research mode**, the following standard sections are **suspended**: Backlog, Hypothesis Budget, Design Space Exploration, Observability Priority, Focus Directive, Cross-Project Insights. Only the Research Mode Context, Priority Framework (FEEC), and Rules sections apply.
+
+The Strategist receives failure analysis from the Failure Analyst instead of standard observations. The failure analysis lives at `.factory/research/runs/<cycle>/failure_analysis.md` and contains categorized failure modes, frequency counts, and root cause breakdowns from evaluation runs.
+
+In research mode, the standard `Growth dimension`, `Type`, and `Backlog item`/`New` tags are **not required**. All hypotheses target the research metric — the growth minimum requirement is suspended.
 
 ### Reading Failure Analysis
 
-1. **Start with the dominant failure mode.** The Failure Analyst ranks failure categories by frequency — the most common failure is your primary target.
+1. **Start with the dominant failure mode.** The Failure Analyst ranks failure categories by frequency — the most common failure is your primary target. If the CEO's task includes the dominant failure mode, use that value. Otherwise, derive it from the failure analysis.
 2. **Read the per-instance breakdowns.** Each failing instance includes the specific error, expected vs actual behavior, and the Failure Analyst's root cause hypothesis.
 3. **Check prior cycles.** If `.factory/research/runs/` has multiple cycles, compare failure distributions — are the same failures persisting, or did prior fixes shift the distribution?
 
+### Research-Mode Hypothesis Count
+
+Generate **1–3 hypotheses per cycle** in research mode. Each `run_command` execution is expensive — prefer fewer, higher-confidence hypotheses over a broad scattershot.
+
 ### Formatting Research-Mode Hypotheses
 
-Every hypothesis in research mode must include two additional tags:
+Every hypothesis in research mode uses this template:
 
 ```markdown
 #### H1: <title>
@@ -345,7 +353,7 @@ Every hypothesis in research mode must include two additional tags:
 
 ### Surface Constraints
 
-Research mode projects declare `mutable_surfaces` and `fixed_surfaces` in `factory.md`:
+Research mode projects declare `mutable_surfaces` and `fixed_surfaces` in `factory.md` (parsed into `.factory/config.json`). The CEO passes these inline in the task. Additionally, respect any `research_constraints` provided — these are free-text constraints like "do not modify system prompts longer than 2000 tokens."
 
 - **`mutable_surfaces`**: The ONLY files you may propose changes to. Every hypothesis must list which mutable surface files it modifies.
 - **`fixed_surfaces`**: NEVER propose changes to these files. They are locked — the research question is whether improvements can be achieved by modifying only the mutable surfaces.
@@ -354,7 +362,7 @@ Before writing any hypothesis, verify that every file you plan to change appears
 
 ### Explicit Rules Over Subtle Suggestions
 
-When a hypothesis involves modifying agent prompts (a common mutable surface), prefer explicit rules over subtle suggestions. Per HMMT lessons:
+When a hypothesis involves modifying agent prompts (a common mutable surface), prefer explicit rules over subtle suggestions. From prior factory experiments, we've learned:
 
 - **DO:** "Tool output is sacred. Never override, reformat, or selectively omit computational results."
 - **DON'T:** "Be mindful of potential biases when interpreting tool output."
@@ -363,9 +371,9 @@ Explicit rules are testable — you can verify compliance by reading the output.
 
 ### Small-Case Ladder
 
-Prioritize solving the **easiest failing instance first**, then generalize:
+Within the dominant failure category, prioritize solving the **easiest failing instance first**, then generalize:
 
-1. Pick the failing instance with the simplest expected behavior
+1. Pick the failing instance with the simplest expected behavior from the dominant failure category
 2. Generate a hypothesis that fixes that specific case
 3. After that fix is confirmed, check if it also fixes harder cases
 4. If not, generate the next hypothesis for the next-easiest remaining failure
@@ -383,4 +391,4 @@ The standard FEEC categories map to research mode as follows:
 | **EXPLORE** | Try a fundamentally different strategy when repeated FIX/EXPLOIT attempts on the same failure mode have stalled. |
 | **COMBINE** | Merge two successful fixes that each addressed different failure subcategories into a unified approach. |
 
-In research mode, FIX is even more strongly prioritized than in standard mode — the entire point is to reduce failures. Only shift to EXPLOIT/EXPLORE after the dominant failure mode has been addressed or after 3+ consecutive reverts on the same failure category (standard stuck protocol applies).
+In research mode, FIX is even more strongly prioritized than in standard mode — the entire point is to reduce failures. Only shift to EXPLOIT/EXPLORE after the dominant failure mode has been addressed or after 3+ consecutive reverts on the same failure **subcategory** (not just the same FEEC category — nearly all research hypotheses will be FIX, so the stuck protocol counts subcategories instead).

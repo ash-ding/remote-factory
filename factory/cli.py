@@ -1543,7 +1543,7 @@ def _auto_detect_mode(project_path: Path, has_prompt: bool = False, force_fresh:
             config = _run(ExperimentStore(project_path).read_config())
             if config.research_target is not None:
                 mode = "research"
-        except Exception:
+        except (FileNotFoundError, json.JSONDecodeError, ValueError, KeyError):
             pass
 
     print(f"  State: {state.value} → mode: {mode}", file=sys.stderr)
@@ -2101,7 +2101,8 @@ def build_parser() -> argparse.ArgumentParser:
     # agent — invoke a specialist agent directly
     p = sub.add_parser("agent", help="Invoke a specialist agent with a task")
     p.add_argument("role", choices=["researcher", "strategist", "builder", "reviewer",
-                                     "evaluator", "archivist", "distiller", "ceo"],
+                                     "evaluator", "archivist", "distiller", "ceo",
+                                     "failure_analyst"],
                     help="Agent role to invoke")
     p.add_argument("--task", required=True, help="Task description for the agent")
     p.add_argument("--project", required=True, help="Path to the project")

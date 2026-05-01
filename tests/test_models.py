@@ -213,18 +213,25 @@ class TestResearchTarget:
         assert t.result_parser == "json"
         assert t.timeout == 3600
 
-    def test_custom_defaults(self):
+    def test_custom_timeout(self):
         t = ResearchTarget(
             objective="Maximize accuracy",
             metric="accuracy",
             target=0.95,
             run_command="python train.py",
             result_path="results.json",
-            result_parser="exit_code",
             timeout=7200,
         )
-        assert t.result_parser == "exit_code"
+        assert t.result_parser == "json"
         assert t.timeout == 7200
+
+    def test_rejects_invalid_parser(self):
+        with pytest.raises(Exception):
+            ResearchTarget(
+                objective="x", metric="y", target=1.0,
+                run_command="z", result_path="r",
+                result_parser="exit_code",
+            )
 
     def test_rejects_extra_fields(self):
         with pytest.raises(Exception):

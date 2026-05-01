@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
+import os
+import signal
 import time
 from pathlib import Path
 
@@ -41,8 +44,10 @@ def parse_result(result_path: Path, result_parser: str, metric: str) -> float:
     return _navigate(data, metric)
 
 
-def _navigate(data: dict, key_path: str) -> float:
+def _navigate(data: object, key_path: str) -> float:
     """Walk a dotted key path and return the leaf as float."""
+    if not isinstance(data, dict):
+        raise ResultParseError("result data is not a JSON object")
     parts = key_path.split(".")
     current: object = data
     for part in parts:
@@ -50,19 +55,28 @@ def _navigate(data: dict, key_path: str) -> float:
             raise ResultParseError(f"key path '{key_path}' not found in result data")
         current = current[part]
 
+    if isinstance(current, bool):
+        raise ResultParseError(
+            f"value at '{key_path}' is boolean, not numeric: {current!r}"
+        )
     try:
-        return float(current)  # type: ignore[arg-type]
+        value = float(current)  # type: ignore[arg-type]
     except (TypeError, ValueError) as exc:
         raise ResultParseError(
             f"value at '{key_path}' is not numeric: {current!r}"
         ) from exc
+    if math.isnan(value) or math.isinf(value):
+        raise ResultParseError(
+            f"value at '{key_path}' is not finite: {current!r}"
+        )
+    return value
 
 
-def _parse_ratio(data: dict, metric: str) -> float:
+def _parse_ratio(data: object, metric: str) -> float:
     """Parse a slash-ratio path like ``resolved/total``."""
     parts = metric.split("/")
-    if len(parts) != 2:
-        raise ResultParseError(f"ratio metric must have exactly two parts: {metric}")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ResultParseError(f"ratio metric must have exactly two non-empty parts: {metric}")
 
     numerator_key, denominator_key = parts
     numerator = _navigate(data, numerator_key)
@@ -88,6 +102,8 @@ def ensure_research_dir(project_path: Path) -> Path:
 
 def create_run_dir(project_path: Path, cycle_id: str) -> Path:
     """Create and return ``.factory/research/runs/<cycle_id>/``."""
+    if "/" in cycle_id or "\\" in cycle_id or ".." in cycle_id:
+        raise ValueError(f"invalid cycle_id (path traversal): {cycle_id!r}")
     run_dir = project_path / ".factory" / "research" / "runs" / cycle_id
     run_dir.mkdir(parents=True, exist_ok=True)
     log.debug("run_dir_created", path=str(run_dir), cycle_id=cycle_id)
@@ -106,7 +122,11 @@ def load_run_summary(run_dir: Path) -> dict | None:
     path = run_dir / "summary.json"
     if not path.exists():
         return None
-    return json.loads(path.read_text())
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        log.warning("corrupt_summary_json", path=str(path))
+        return None
 
 
 def list_runs(project_path: Path) -> list[Path]:
@@ -155,6 +175,7 @@ async def execute_run(
             cwd=project_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
             proc.communicate(), timeout=config.timeout
@@ -162,15 +183,45 @@ async def execute_run(
     except asyncio.TimeoutError:
         duration = time.monotonic() - start
         log.warning("research_run_timeout", cycle_id=cycle_id, duration=duration)
-        proc.kill()
+        # Kill entire process group to avoid orphan child processes
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            proc.kill()
         await proc.wait()
+        # Capture any partial output from pipe buffers
+        partial_stdout = ""
+        partial_stderr = ""
+        if proc.stdout:
+            try:
+                partial_stdout = (await proc.stdout.read()).decode(errors="replace")
+            except Exception:
+                pass
+        if proc.stderr:
+            try:
+                partial_stderr = (await proc.stderr.read()).decode(errors="replace")
+            except Exception:
+                pass
         result = RunResult(
             status=RunStatus.TIMEOUT,
             metric_value=0.0,
             duration_seconds=duration,
             artifacts_path=run_dir,
+            stdout=partial_stdout,
+            stderr=partial_stderr,
+        )
+        _save_artifacts(run_dir, result, config)
+        return result
+    except OSError as exc:
+        duration = time.monotonic() - start
+        log.error("research_run_os_error", cycle_id=cycle_id, error=str(exc))
+        result = RunResult(
+            status=RunStatus.ERROR,
+            metric_value=0.0,
+            duration_seconds=duration,
+            artifacts_path=run_dir,
             stdout="",
-            stderr="",
+            stderr=str(exc),
         )
         _save_artifacts(run_dir, result, config)
         return result
