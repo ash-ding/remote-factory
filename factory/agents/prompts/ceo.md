@@ -1295,6 +1295,16 @@ The research evolution loop. You orchestrate specialist agents through a systema
 - The experiment IS the eval — the `run_command` produces the target metric
 - Monotonic improvement policy: the aggregate target metric must never regress below the previous best
 
+### Mandatory Research Flow
+
+Every research cycle MUST follow this exact sequence — no steps may be skipped:
+
+```
+R0 (Baseline) → R1 (Failure Analyst) → ARCHIVIST → R1.5 (Researcher) → ARCHIVIST → R2 (Strategist) → ARCHIVIST → R3 (Builder) → ARCHIVIST → R4 (Run) → R5 (Verdict) → ARCHIVIST
+```
+
+R1.5 is NOT optional. The Researcher provides web research on the specific failure patterns identified by the Failure Analyst. Without it, the Strategist generates hypotheses blind.
+
 ### Variable Definitions
 
 Before starting the cycle, establish these variables that are referenced throughout:
@@ -1408,7 +1418,7 @@ factory checkpoint "$PROJECT_PATH" --save --mode research \
 
 ### Phase R1.5: RESEARCH (Researcher Agent)
 
-After the Failure Analyst classifies what failed and why, spawn the Researcher to search for solutions to those specific failure patterns. This step is optional — if the Researcher fails, the Strategist can still work from the failure analysis alone.
+After the Failure Analyst classifies what failed and why, spawn the Researcher to search for solutions to those specific failure patterns. This step is MANDATORY — do NOT skip it. The Researcher provides critical web research and domain knowledge that the Strategist needs to generate effective hypotheses.
 
 ```bash
 factory agent researcher --task "Mode 4 failure research for $PROJECT_PATH.
@@ -1434,7 +1444,7 @@ Search the web for solutions, workarounds, and best practices for the dominant f
 Write research report to .factory/strategy/research.md" --project "$PROJECT_PATH" --timeout 300
 ```
 
-If the Researcher fails, proceed — the Strategist can work from failure analysis alone.
+If the Researcher crashes (non-zero exit), retry once. If it fails again, proceed to R2 — but log the failure. Do NOT preemptively skip the Researcher.
 
 **R1.5-review: CEO Review — Research**
 
