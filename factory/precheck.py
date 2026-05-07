@@ -300,6 +300,7 @@ def check_hard_constraints(
     timeout: float = 120,
 ) -> list[CheckResult]:
     """Run user-defined hard constraint checks. Each must exit 0 to pass."""
+    log.info("hard_constraints_start", count=len(constraints))
     results: list[CheckResult] = []
     for constraint in constraints:
         try:
@@ -327,6 +328,7 @@ def check_hard_constraints(
             continue
 
         if result.returncode == 0:
+            log.info("hard_constraint_result", name=constraint.name, passed=True)
             results.append(CheckResult(
                 name=f"hard_constraint:{constraint.name}",
                 passed=True,
@@ -336,6 +338,7 @@ def check_hard_constraints(
             stderr_snippet = result.stderr.strip()[:200] if result.stderr else ""
             stdout_snippet = result.stdout.strip()[:200] if result.stdout else ""
             output = stderr_snippet or stdout_snippet or f"exit code {result.returncode}"
+            log.info("hard_constraint_result", name=constraint.name, passed=False, detail=output)
             results.append(CheckResult(
                 name=f"hard_constraint:{constraint.name}",
                 passed=False,

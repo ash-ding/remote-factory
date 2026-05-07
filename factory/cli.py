@@ -263,8 +263,8 @@ def cmd_finalize(args: argparse.Namespace) -> int:
         config_path = project_path / ".factory" / "config.json"
         if config_path.exists():
             config = FactoryConfig(**json.loads(config_path.read_text()))
-            history = _run(store.load_history()) if hasattr(store, "load_history") else []
-            history_dicts = [r.model_dump() if hasattr(r, "model_dump") else r for r in history]
+            history = _run(store.load_history())
+            history_dicts = [r.model_dump() for r in history]
 
             precheck_result = run_precheck(
                 score_before=score_before,
@@ -274,7 +274,7 @@ def cmd_finalize(args: argparse.Namespace) -> int:
                 history=history_dicts,
                 project_path=project_path,
                 smoke_test_command=config.smoke_test,
-                hard_constraints=config.hard_constraints or None,
+                hard_constraints=config.hard_constraints,
             )
 
             if not precheck_result.passed:

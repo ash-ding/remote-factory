@@ -11,13 +11,13 @@ from typing import Literal
 import structlog
 
 from factory.models import (
-    HardConstraint,
     CompositeScore,
     CostBudgetConfig,
     EvalProfile,
     EvalWeights,
     ExperimentRecord,
     FactoryConfig,
+    HardConstraint,
     HypothesisBudget,
     ProjectEvalDimension,
     ResearchTarget,
