@@ -344,6 +344,10 @@ factory backlog-list <path>
 factory backlog-add <path> "..."
 factory backlog-remove <path> "..."
 
+# Plugin agents
+factory install                         # Install all agents to ~/.claude/agents/
+factory install --role builder          # Install a single agent
+
 # Operations
 factory dashboard                       # Live web dashboard on :8420
 factory detect <path>                   # Print project state
@@ -354,6 +358,26 @@ factory resume <path>                   # Resume from checkpoint
 ```
 
 See `factory --help` for the complete list.
+
+---
+
+## Plugin Agents
+
+Every factory agent is available as a standalone Claude Code subagent. Install them once and invoke any agent from any project:
+
+```bash
+# Install all 9 agents
+factory install
+
+# Use from anywhere
+claude --agent factory-ceo "improve this project"
+claude --agent factory-researcher "study the auth system"
+claude --agent factory-builder "add dark mode support"
+```
+
+Available agents: `factory-researcher`, `factory-strategist`, `factory-builder`, `factory-reviewer`, `factory-evaluator`, `factory-archivist`, `factory-distiller`, `factory-ceo`, `factory-failure_analyst`.
+
+Agent metadata (model, tools, descriptions) is defined in `factory/agents/agents.yml`. Source prompts live in `factory/agents/prompts/`. A CI workflow auto-generates a `plugin` branch with ready-to-use agent files on every push to main.
 
 ---
 
