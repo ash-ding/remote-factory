@@ -14,8 +14,38 @@ from factory.issue import (
     fetch_issue,
     format_issue_as_spec,
     infer_remote,
+    is_issue_ref,
     parse_issue_ref,
 )
+
+
+# ── is_issue_ref ────────────────────────────────────────────
+
+
+class TestIsIssueRef:
+    def test_bare_number(self) -> None:
+        assert is_issue_ref("42") is True
+
+    def test_github_url(self) -> None:
+        assert is_issue_ref("https://github.com/owner/repo/issues/99") is True
+
+    def test_gitlab_url(self) -> None:
+        assert is_issue_ref("https://gitlab.com/team/repo/-/issues/7") is True
+
+    def test_shorthand(self) -> None:
+        assert is_issue_ref("owner/repo#42") is True
+
+    def test_plain_text(self) -> None:
+        assert is_issue_ref("dashboard UI") is False
+
+    def test_plain_text_with_slash(self) -> None:
+        assert is_issue_ref("eval/reliability") is False
+
+    def test_whitespace_stripped(self) -> None:
+        assert is_issue_ref("  42  ") is True
+
+    def test_nested_gitlab_group(self) -> None:
+        assert is_issue_ref("https://gitlab.com/g/s/p/-/issues/3") is True
 
 
 # ── parse_issue_ref ──────────────────────────────────────────
@@ -42,6 +72,13 @@ class TestParseIssueRef:
         assert forge == "gitlab"
         assert owner_repo == "acme/widgets"
         assert number == 7
+
+    def test_gitlab_nested_groups(self, tmp_project: Path) -> None:
+        url = "https://gitlab.com/group/subgroup/project/-/issues/12"
+        forge, owner_repo, number = parse_issue_ref(url, tmp_project)
+        assert forge == "gitlab"
+        assert owner_repo == "group/subgroup/project"
+        assert number == 12
 
     def test_github_shorthand(self, tmp_project: Path) -> None:
         forge, owner_repo, number = parse_issue_ref("owner/repo#123", tmp_project)
@@ -223,53 +260,73 @@ class TestFetchIssue:
                 fetch_issue("https://github.com/org/repo/issues/1", tmp_project)
 
 
-# ── CLI mutual exclusion ────────────────────────────────────
+# ── CLI focus-as-issue integration ─────────────────────────
 
 
-class TestCLIMutualExclusion:
-    """Test that --issue is mutually exclusive with --prompt, --focus, --no-github."""
+class TestFocusIssueIntegration:
+    """Test that --focus with issue refs works correctly via _resolve_focus_issue."""
 
-    def _parse_args(self, *argv: str) -> int:
-        """Run main() with given argv and return exit code."""
-        import sys
-        from unittest.mock import patch as mock_patch
+    def test_focus_plain_text_not_resolved(self) -> None:
+        from factory.cli import _resolve_focus_issue
+        result = _resolve_focus_issue("dashboard UI", Path("/tmp/fake"), no_github=False)
+        assert result is None
 
-        with mock_patch.object(sys, "argv", ["factory", *argv]):
-            from factory.cli import main
-            return main()
+    def test_focus_bare_number_resolved(self) -> None:
+        from factory.cli import _resolve_focus_issue
 
-    def test_issue_prompt_mutual_exclusion_ceo(self) -> None:
-        code = self._parse_args("ceo", "/tmp/fake", "--issue", "42", "--prompt", "foo.md")
-        assert code == 1
+        gh_response = json.dumps({
+            "number": 42,
+            "title": "Add widgets",
+            "body": "Details.",
+            "labels": [],
+            "url": "https://github.com/org/repo/issues/42",
+        })
+        with (
+            patch("factory.issue.infer_remote", return_value=("github", "org/repo")),
+            patch("factory.issue.subprocess.run") as mock_run,
+            patch("pathlib.Path.mkdir"),
+            patch("pathlib.Path.write_text"),
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=gh_response, stderr="",
+            )
+            result = _resolve_focus_issue("42", Path("/tmp/fake"), no_github=False)
 
-    def test_issue_focus_mutual_exclusion_ceo(self) -> None:
-        code = self._parse_args("ceo", "/tmp/fake", "--issue", "42", "--focus", "bar")
-        assert code == 1
+        assert result is not None
+        context, number, url = result
+        assert number == 42
+        assert "Add widgets" in context
 
-    def test_issue_interactive_mutual_exclusion_ceo(self) -> None:
-        code = self._parse_args(
-            "ceo", "some idea", "--issue", "42", "--mode", "interactive",
-        )
-        assert code == 1
+    def test_focus_no_github_with_issue_ref_exits(self) -> None:
+        with pytest.raises(SystemExit):
+            from factory.cli import _resolve_focus_issue
+            _resolve_focus_issue("42", Path("/tmp/fake"), no_github=True)
 
-    def test_issue_research_mutual_exclusion_ceo(self) -> None:
-        code = self._parse_args(
-            "ceo", "some idea", "--issue", "42", "--mode", "research",
-        )
-        assert code == 1
+    def test_focus_url_resolved(self) -> None:
+        from factory.cli import _resolve_focus_issue
 
-    def test_issue_no_github_mutual_exclusion_ceo(self) -> None:
-        code = self._parse_args("ceo", "/tmp/fake", "--issue", "42", "--no-github")
-        assert code == 1
+        gh_response = json.dumps({
+            "number": 99,
+            "title": "Fix bug",
+            "body": "Broken.",
+            "labels": [{"name": "bug"}],
+            "url": "https://github.com/acme/repo/issues/99",
+        })
+        with (
+            patch("factory.issue.subprocess.run") as mock_run,
+            patch("pathlib.Path.mkdir"),
+            patch("pathlib.Path.write_text"),
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=gh_response, stderr="",
+            )
+            result = _resolve_focus_issue(
+                "https://github.com/acme/repo/issues/99",
+                Path("/tmp/fake"),
+                no_github=False,
+            )
 
-    def test_issue_prompt_mutual_exclusion_run(self) -> None:
-        code = self._parse_args("run", "/tmp/fake", "--issue", "42", "--prompt", "foo.md")
-        assert code == 1
-
-    def test_issue_focus_mutual_exclusion_run(self) -> None:
-        code = self._parse_args("run", "/tmp/fake", "--issue", "42", "--focus", "bar")
-        assert code == 1
-
-    def test_issue_no_github_mutual_exclusion_run(self) -> None:
-        code = self._parse_args("run", "/tmp/fake", "--issue", "42", "--no-github")
-        assert code == 1
+        assert result is not None
+        context, number, url = result
+        assert number == 99
+        assert "Fix bug" in context

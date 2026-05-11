@@ -49,7 +49,7 @@ def parse_issue_ref(ref: str, project_path: Path) -> tuple[Forge, str, int]:
         return forge, owner_repo, number
 
     gl_url = re.match(
-        r"https?://([^/]+)/([^/]+/[^/]+)/-/issues/(\d+)", ref,
+        r"https?://([^/]+)/(.+?)/-/issues/(\d+)", ref,
     )
     if gl_url:
         owner_repo = gl_url.group(2)
@@ -157,6 +157,24 @@ def fetch_issue(issue_ref: str, project_path: Path) -> IssueSpec:
         url=data.get("web_url", ""),
         forge=forge,
     )
+
+
+def is_issue_ref(ref: str) -> bool:
+    """Check if *ref* looks like an issue reference without needing a project path.
+
+    Detects URLs, ``owner/repo#N`` shorthand, and bare integers.
+    Does NOT validate that the issue exists — just pattern-matches.
+    """
+    ref = ref.strip()
+    if ref.isdigit():
+        return True
+    if re.match(r"https?://[^/]+/.+/issues/\d+", ref):
+        return True
+    if re.match(r"https?://[^/]+/.+/-/issues/\d+", ref):
+        return True
+    if re.match(r"^[^#]+/[^#]+#\d+$", ref):
+        return True
+    return False
 
 
 def format_issue_as_spec(spec: IssueSpec) -> str:
