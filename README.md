@@ -9,6 +9,8 @@
 
 **Describe what you want. The Factory builds it, tests it, and keeps improving it — autonomously.** You give it a spec file, a rough idea, or an existing codebase. The Factory researches best practices, scaffolds the project, sets up evaluation, and runs a continuous improvement loop — measuring every change and keeping only what makes things better.
 
+**Why we built this.** Existing AI coding tools like [GSD](https://github.com/gsd-build/get-shit-done) are powerful, but they often require repetitive manual steps and hand verification at every phase. The Factory was built to minimize that — agents verify their own work, and what you get back just works.
+
 ---
 
 ## Quick Start
