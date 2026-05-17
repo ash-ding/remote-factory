@@ -34,7 +34,7 @@ uv tool install -e .
 factory ceo "Build a personal homepage with a blog"
 ```
 
-Both forms are equivalent. This README uses `factory` throughout so you can copy-paste without installing first. If you've installed the CLI, just replace `factory` with `factory`.
+Both forms are equivalent. If running from source without installing, prefix commands with `uv run` (e.g., `uv run factory ceo "..."`). If you've installed the CLI via `uv tool install`, bare `factory` works directly.
 
 The factory stores all state locally — no external services required beyond Claude Code. Per-project state lives in `.factory/` (add it to `.gitignore`). Global state (project registry, evolved playbooks) lives in `~/.factory/`.
 
