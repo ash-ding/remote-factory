@@ -1465,6 +1465,6 @@ class TestNoBareUvRunPythonMFactory:
                         if "uv run python -m factory" in line:
                             violations.append(f"{Path(filepath).relative_to(repo_root)}:{lineno}")
         assert violations == [], (
-            f"Found 'uv run python -m factory' — use bare 'factory' instead:\n"
+            "Found 'uv run python -m factory' — use bare 'factory' instead:\n"
             + "\n".join(f"  {v}" for v in violations)
         )
