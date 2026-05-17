@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 import signal
 import threading
 from datetime import datetime
@@ -843,11 +842,21 @@ class TestHeartbeatLoop:
 
     def test_loop_graceful_sigterm(self, tmp_path, capsys):
         """SIGTERM during sleep causes clean exit."""
-        def _send_sigterm_after_cycle(*args, **kwargs):
-            threading.Timer(0.05, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+        captured_handlers: dict[int, object] = {}
+        original_signal = signal.signal
+
+        def _capture_signal(signum, handler):
+            captured_handlers[signum] = handler
+            return original_signal(signum, handler)
+
+        def _trigger_sigterm_after_cycle(*args, **kwargs):
+            handler = captured_handlers.get(signal.SIGTERM)
+            if handler and callable(handler):
+                threading.Timer(0.05, handler, args=(signal.SIGTERM, None)).start()
             return ("ok", 0)
 
-        with patch("factory.agents.runner.invoke_agent", AsyncMock(side_effect=_send_sigterm_after_cycle)), \
+        with patch("signal.signal", side_effect=_capture_signal), \
+             patch("factory.agents.runner.invoke_agent", AsyncMock(side_effect=_trigger_sigterm_after_cycle)), \
              patch("factory.cli._chain_modes", return_value=0):
             result = main(["run", str(tmp_path), "--loop", "--interval", "30"])
 
@@ -857,11 +866,21 @@ class TestHeartbeatLoop:
 
     def test_loop_graceful_sigint(self, tmp_path, capsys):
         """SIGINT during sleep causes clean exit."""
-        def _send_sigint_after_cycle(*args, **kwargs):
-            threading.Timer(0.05, lambda: os.kill(os.getpid(), signal.SIGINT)).start()
+        captured_handlers: dict[int, object] = {}
+        original_signal = signal.signal
+
+        def _capture_signal(signum, handler):
+            captured_handlers[signum] = handler
+            return original_signal(signum, handler)
+
+        def _trigger_sigint_after_cycle(*args, **kwargs):
+            handler = captured_handlers.get(signal.SIGINT)
+            if handler and callable(handler):
+                threading.Timer(0.05, handler, args=(signal.SIGINT, None)).start()
             return ("ok", 0)
 
-        with patch("factory.agents.runner.invoke_agent", AsyncMock(side_effect=_send_sigint_after_cycle)), \
+        with patch("signal.signal", side_effect=_capture_signal), \
+             patch("factory.agents.runner.invoke_agent", AsyncMock(side_effect=_trigger_sigint_after_cycle)), \
              patch("factory.cli._chain_modes", return_value=0):
             result = main(["run", str(tmp_path), "--loop", "--interval", "30"])
 
