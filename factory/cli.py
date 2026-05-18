@@ -352,6 +352,7 @@ def cmd_message(args: argparse.Namespace) -> int:
 
 def cmd_history(args: argparse.Namespace) -> int:
     from factory.store import ExperimentStore
+    from factory.strategy import format_tiered_history
 
     store = ExperimentStore(Path(args.path))
     records = _run(store.load_history())
@@ -359,14 +360,18 @@ def cmd_history(args: argparse.Namespace) -> int:
         print("No experiments recorded.")
         return 0
 
-    header = f"{'ID':>4}  {'Verdict':>7}  {'Delta':>8}  {'Cost':>8}  Hypothesis"
-    print(header)
-    print("-" * len(header))
-    for r in records:
-        delta = f"{r.delta:+.4f}" if r.delta is not None else "    n/a"
-        cost = f"${r.cost_usd:.2f}" if r.cost_usd is not None else "     n/a"
-        hyp = r.hypothesis[:60]
-        print(f"{r.id:>4}  {r.verdict:>7}  {delta:>8}  {cost:>8}  {hyp}")
+    record_dicts = [
+        {
+            "id": r.id,
+            "hypothesis": r.hypothesis,
+            "verdict": r.verdict,
+            "delta": r.delta,
+            "change_summary": r.change_summary,
+            "cost_usd": r.cost_usd,
+        }
+        for r in records
+    ]
+    print(format_tiered_history(record_dicts))
     return 0
 
 
@@ -1137,6 +1142,19 @@ def cmd_backfill_citations(args: argparse.Namespace) -> int:
     print(f"Backfilled citations for {len(index)} experiments")
     for exp_id, cites in sorted(index.items(), key=lambda x: int(x[0])):
         print(f"  #{exp_id}: {', '.join(cites[:5])}")
+    return 0
+
+
+def cmd_backfill_archive(args: argparse.Namespace) -> int:
+    """Generate archive notes for experiments missing from .factory/archive/experiments/."""
+    from factory.backfill_archive import backfill_archive
+
+    project_path = Path(args.path).resolve()
+    result = _run(backfill_archive(project_path))
+    print(
+        f"Archive backfill complete: {result['existed']} existed, "
+        f"{result['created']} created, {result['total']} total"
+    )
     return 0
 
 
@@ -2561,6 +2579,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("backfill-citations", help="Extract citations from experiment text into citations.json")
     p.add_argument("path", help="Path to the project")
 
+    # backfill-archive
+    p = sub.add_parser("backfill-archive", help="Generate archive notes for experiments missing from archive")
+    p.add_argument("path", help="Path to the project")
+
     # research
     p = sub.add_parser("research", help="Print research citation index for experiments")
     p.add_argument("path", help="Path to the project")
@@ -2915,6 +2937,7 @@ def main(argv: list[str] | None = None) -> int:
         "summary": cmd_summary,
         "research": cmd_research,
         "backfill-citations": cmd_backfill_citations,
+        "backfill-archive": cmd_backfill_archive,
         "diff": cmd_diff,
         "explain": cmd_explain,
         "export": cmd_export,
