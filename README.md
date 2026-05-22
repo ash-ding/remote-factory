@@ -4,6 +4,8 @@
 [![codecov](https://codecov.io/gh/akashgit/remote-factory/graph/badge.svg)](https://codecov.io/gh/akashgit/remote-factory)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Runner: Claude Code](https://img.shields.io/badge/runner-Claude_Code-7c3aed)](https://docs.anthropic.com/en/docs/claude-code)
+[![Runner: Bob Shell](https://img.shields.io/badge/runner-Bob_Shell-f59e0b)](https://bob.ibm.com)
 
 **Describe what you want. The Factory builds it, tests it, and keeps improving it — autonomously.** A CEO agent orchestrates eight specialists — each running as an independent [Claude Code](https://docs.anthropic.com/en/docs/claude-code) subprocess. See [Architecture](docs/architecture.md) for the full deep-dive.
 
