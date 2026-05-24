@@ -1604,11 +1604,11 @@ Establish the starting point by running the system and recording the baseline me
    9. Report: metric name, metric value, run status, duration." --project "$PROJECT_PATH" --timeout $RUN_TIMEOUT
    ```
 
-4. **Multi-run baseline (when inner_loop is configured).** If `.factory/config.json` contains an `inner_loop` object with `runs_per_cycle > 1`, run the baseline command N times instead of once. Each sub-run gets its own directory: `.factory/research/runs/000-baseline-runI`. Write `.factory/research/runs/000-baseline/summary.json` with the aggregated metric (using the configured `aggregate` method: mean, median, max, or all_pass), plus a `runs` array with per-run details and an `aggregate` field naming the method.
+5. **Multi-run baseline (when inner_loop is configured).** If `.factory/config.json` contains an `inner_loop` object with `runs_per_cycle > 1`, run the baseline command N times instead of once. Each sub-run gets its own directory: `.factory/research/runs/000-baseline-runI`. Write `.factory/research/runs/000-baseline/summary.json` with the aggregated metric (using the configured `aggregate` method: mean, median, max, or all_pass), plus a `runs` array with per-run details and an `aggregate` field naming the method.
 
-5. **Record baseline metric.** Save the metric value as `$BASELINE_METRIC`. If this is not the first cycle, read previous best from `.factory/research/runs/` summaries and set `$PREVIOUS_BEST`.
+6. **Record baseline metric.** Save the metric value as `$BASELINE_METRIC`. If this is not the first cycle, read previous best from `.factory/research/runs/` summaries and set `$PREVIOUS_BEST`.
 
-6. **Check for prior runs:**
+7. **Check for prior runs:**
    ```bash
    ls "$PROJECT_PATH/.factory/research/runs/"
    ```

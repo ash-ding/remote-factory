@@ -148,13 +148,16 @@ def detect_plateau(
     ``metric_value`` key.  Requires at least ``threshold + 1`` entries (one
     baseline plus *threshold* cycles).
     """
+    if threshold <= 0:
+        return False
+
     if len(run_summaries) < threshold + 1:
         return False
 
-    pre_window = run_summaries[:-(threshold)]
+    pre_window = run_summaries[:-threshold]
     best_before = max(s["metric_value"] for s in pre_window)
 
-    window = run_summaries[-(threshold):]
+    window = run_summaries[-threshold:]
     best_in_window = max(s["metric_value"] for s in window)
 
     plateaued = best_in_window <= best_before

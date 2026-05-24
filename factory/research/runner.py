@@ -353,8 +353,13 @@ async def execute_multi_run(
 
     agg_value = aggregate_metric(values, inner_loop.aggregate) if values else 0.0
 
+    if inner_loop.aggregate == AggregateMethod.ALL_PASS:
+        status = "PASS" if len(values) == n else "FAIL"
+    else:
+        status = "PASS" if values else "FAIL"
+
     summary = {
-        "status": "PASS" if values else "FAIL",
+        "status": status,
         "metric": config.metric,
         "metric_value": agg_value,
         "aggregate": inner_loop.aggregate.value,
