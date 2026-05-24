@@ -144,45 +144,40 @@ class TestClassifyWithLLM:
         assert len(result) == 1
         assert result[0]["label"] == "Build it"
 
-    def test_invalid_json_falls_back(self) -> None:
+    def test_invalid_json_returns_none(self) -> None:
         mock_runner = MagicMock()
         mock_runner.headless = AsyncMock(return_value=("not valid json at all", 0))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("weather CLI")
 
-        assert len(result) == 2
-        assert "recommended" in result[0]["label"].lower()
-        assert "weather CLI" in result[0]["command"]
+        assert result is None
 
-    def test_runner_failure_falls_back(self) -> None:
+    def test_runner_failure_returns_none(self) -> None:
         mock_runner = MagicMock()
         mock_runner.headless = AsyncMock(return_value=("Error", 1))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("weather CLI")
 
-        assert len(result) == 2
-        assert "weather CLI" in result[0]["command"]
+        assert result is None
 
-    def test_runner_not_available_falls_back(self) -> None:
+    def test_runner_not_available_returns_none(self) -> None:
         with patch("factory.runners.get_runner", side_effect=Exception("No runner")):
             result = _classify_with_llm("weather CLI")
 
-        assert len(result) == 2
-        assert "weather CLI" in result[0]["command"]
+        assert result is None
 
-    def test_empty_array_falls_back(self) -> None:
+    def test_empty_array_returns_none(self) -> None:
         mock_runner = MagicMock()
         mock_runner.headless = AsyncMock(return_value=("[]", 0))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("test idea")
 
-        assert len(result) == 2
-        assert "test idea" in result[0]["command"]
+        assert result is None
 
-    def test_missing_required_fields_falls_back(self) -> None:
+    def test_missing_required_fields_returns_none(self) -> None:
         bad_suggestions = [{"label": "Test"}]  # missing command
         mock_runner = MagicMock()
         mock_runner.headless = AsyncMock(return_value=(json.dumps(bad_suggestions), 0))
@@ -190,8 +185,7 @@ class TestClassifyWithLLM:
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("test idea")
 
-        assert len(result) == 2
-        assert "test idea" in result[0]["command"]
+        assert result is None
 
     def test_truncates_to_3_suggestions(self) -> None:
         suggestions = [
@@ -206,12 +200,19 @@ class TestClassifyWithLLM:
 
         assert len(result) == 3
 
-    def test_preserves_user_input_in_defaults(self) -> None:
-        with patch("factory.runners.get_runner", side_effect=Exception("fail")):
-            result = _classify_with_llm("my exact input text")
+    def test_wizard_shows_cli_ref_on_llm_failure(self) -> None:
+        with patch("builtins.input", side_effect=["test idea"]), \
+             patch("sys.stderr") as mock_stderr, \
+             patch("factory.cli._quick_classify", return_value=None), \
+             patch("factory.cli._classify_with_llm", return_value=None), \
+             patch("os.environ", {}):
+            mock_stderr.isatty.return_value = True
+            mock_stderr.write = MagicMock()
+            code = _welcome_wizard()
 
-        for s in result:
-            assert "my exact input text" in s["command"]
+        assert code == 1
+        output = "".join(call.args[0] for call in mock_stderr.write.call_args_list)
+        assert "quick reference" in output.lower() or "factory ceo" in output
 
 
 # ── _show_spinner ──────────────────────────────────────────────

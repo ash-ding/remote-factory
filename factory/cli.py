@@ -187,28 +187,24 @@ Factory command vocabulary:
 - `factory ceo <path> --focus <N>` — target a specific GitHub issue number
 
 Rules:
-1. The user's EXACT input must appear VERBATIM in the command field — never summarize or shorten it
+1. The user's EXACT input must appear VERBATIM in quoted arguments — never summarize or shorten it
 2. Return 2-3 suggestions as a JSON array
 3. Each element: {"label": "short title", "explanation": "one sentence why", "command": "factory ceo ..."}
 4. First suggestion should be the most likely intent
 5. You may add a "tip" field on the first element with brief advice
+6. If the user mentions fixing, improving, or working on an EXISTING project/repo, suggest `factory ceo <path>` or `factory ceo <path> --focus "..."` — add a tip telling them to replace <path> with the actual path. Do NOT wrap the input in quotes as a new idea when the intent is clearly about an existing project.
 
 User input: """
 
 
-def _classify_with_llm(user_input: str) -> list[dict[str, str]]:
-    """Classify user input via headless runner call. Falls back to defaults on failure."""
+def _classify_with_llm(user_input: str) -> list[dict[str, str]] | None:
+    """Classify user input via headless runner call. Returns None on failure."""
     from factory.runners import get_runner
-
-    default_suggestions = [
-        {"label": "Brainstorm and refine the idea first (recommended)", "explanation": "Research the space, refine the spec, then build.", "command": f'factory ceo {shlex.quote(user_input)} --mode interactive'},
-        {"label": "Build the project directly", "explanation": "Skip brainstorming and start building immediately.", "command": f'factory ceo {shlex.quote(user_input)}'},
-    ]
 
     try:
         runner = get_runner()
     except Exception:
-        return default_suggestions
+        return None
 
     prompt = _CLASSIFICATION_PROMPT + json.dumps(user_input)
     task = "Respond with ONLY a JSON array. No markdown, no explanation."
@@ -220,7 +216,7 @@ def _classify_with_llm(user_input: str) -> list[dict[str, str]]:
 
         result, code = _run(runner.headless(
             prompt, task, Path.cwd(),
-            timeout=30.0,
+            timeout=60.0,
             dangerously_skip_permissions=True,
             role="wizard",
         ))
@@ -229,33 +225,56 @@ def _classify_with_llm(user_input: str) -> list[dict[str, str]]:
         spinner.join(timeout=2.0)
 
         if code != 0:
-            return default_suggestions
+            return None
 
         text = result.strip()
         start = text.find("[")
         end = text.rfind("]")
         if start == -1 or end == -1:
-            return default_suggestions
+            return None
         parsed = json.loads(text[start:end + 1])
         if not isinstance(parsed, list) or len(parsed) == 0:
-            return default_suggestions
+            return None
         for item in parsed:
             if not isinstance(item, dict) or "command" not in item or "label" not in item:
-                return default_suggestions
+                return None
         return parsed[:3]
     except Exception:
         stop_event.set()
         spinner.join(timeout=2.0)
-        return default_suggestions
+        return None
 
 
 _EXAMPLES_BLOCK = """\
   Examples:
-    factory ceo "weather CLI in Python"          Build a new project
-    factory ceo ~/projects/my-app                Improve an existing project
-    factory ceo https://github.com/user/repo     Clone and improve
-    factory ceo spec.md                          Build from a spec file
-    factory ceo ~/projects/my-app --focus "auth"   Fix one thing\
+    factory ceo "weather CLI in Python"            Build a new project
+    factory ceo ~/projects/my-app                  Improve an existing project
+    factory ceo https://github.com/user/repo       Clone and improve
+    factory ceo spec.md                            Build from a spec file
+    factory ceo ~/projects/my-app --focus "auth"   Fix one thing
+    factory ceo ~/projects/my-app --focus 42       Target a GitHub issue\
+"""
+
+_CLI_REF = """\
+  Classification failed — here's a quick reference:
+
+  Build something new:
+    factory ceo "your idea here"                   Build directly
+    factory ceo "your idea" --mode interactive      Brainstorm first, then build
+    factory ceo "your idea" --mode research         Research-driven (metric-focused)
+    factory ceo spec.md                            Build from a spec file
+
+  Work on an existing project:
+    factory ceo /path/to/project                   Run one improvement cycle
+    factory ceo /path/to/project --focus "feature"   Build one specific thing
+    factory ceo /path/to/project --focus 42          Target GitHub issue #42
+    factory ceo /path/to/project --mode interactive  Discuss what to work on
+
+  Clone and improve:
+    factory ceo https://github.com/user/repo       Clone, then improve
+
+  Continuous:
+    factory run /path/to/project --loop            Heartbeat loop\
 """
 
 
@@ -301,8 +320,8 @@ def _welcome_wizard() -> int:
         suggestions = _classify_with_llm(user_input)
 
     if not suggestions:
-        print("\n  Could not classify input. Try:", file=sys.stderr)
-        print(_EXAMPLES_BLOCK, file=sys.stderr)
+        print(file=sys.stderr)
+        print(_CLI_REF, file=sys.stderr)
         return 1
 
     print(file=sys.stderr)
