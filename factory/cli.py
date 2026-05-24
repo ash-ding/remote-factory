@@ -131,7 +131,10 @@ def _show_spinner(stop_event: threading.Event) -> None:
         sys.stderr.flush()
         idx += 1
         stop_event.wait(0.1)
-    sys.stderr.write("\r\033[2K")
+    if use_color:
+        sys.stderr.write("\r\033[2K")
+    else:
+        sys.stderr.write("\r" + " " * 30 + "\r")
     sys.stderr.flush()
 
 
@@ -144,8 +147,8 @@ def _quick_classify(user_input: str) -> list[dict[str, str]] | None:
         factory_dir = expanded / ".factory"
         label_improve = "Improve this project"
         label_interactive = "Discuss what to work on first"
-        cmd_improve = f'factory ceo "{stripped}"'
-        cmd_interactive = f'factory ceo "{stripped}" --mode interactive'
+        cmd_improve = f'factory ceo {shlex.quote(stripped)}'
+        cmd_interactive = f'factory ceo {shlex.quote(stripped)} --mode interactive'
         if factory_dir.is_dir():
             return [
                 {"label": label_improve, "explanation": "Run the improve loop on this project.", "command": cmd_improve},
@@ -158,13 +161,13 @@ def _quick_classify(user_input: str) -> list[dict[str, str]] | None:
 
     if expanded.is_file():
         return [
-            {"label": "Build from this spec file", "explanation": "Use the file as a project specification.", "command": f'factory ceo "{stripped}"'},
+            {"label": "Build from this spec file", "explanation": "Use the file as a project specification.", "command": f'factory ceo {shlex.quote(stripped)}'},
         ]
 
     if _is_github_url(stripped):
         return [
-            {"label": "Clone and improve", "explanation": "Clone the repository and run the improve loop.", "command": f'factory ceo "{stripped}"'},
-            {"label": "Clone and discuss", "explanation": "Clone and discuss what to work on.", "command": f'factory ceo "{stripped}" --mode interactive'},
+            {"label": "Clone and improve", "explanation": "Clone the repository and run the improve loop.", "command": f'factory ceo {shlex.quote(stripped)}'},
+            {"label": "Clone and discuss", "explanation": "Clone and discuss what to work on.", "command": f'factory ceo {shlex.quote(stripped)} --mode interactive'},
         ]
 
     return None
@@ -198,8 +201,8 @@ def _classify_with_llm(user_input: str) -> list[dict[str, str]]:
     from factory.runners import get_runner
 
     default_suggestions = [
-        {"label": "Brainstorm and refine the idea first (recommended)", "explanation": "Research the space, refine the spec, then build.", "command": f'factory ceo "{user_input}" --mode interactive'},
-        {"label": "Build the project directly", "explanation": "Skip brainstorming and start building immediately.", "command": f'factory ceo "{user_input}"'},
+        {"label": "Brainstorm and refine the idea first (recommended)", "explanation": "Research the space, refine the spec, then build.", "command": f'factory ceo {shlex.quote(user_input)} --mode interactive'},
+        {"label": "Build the project directly", "explanation": "Skip brainstorming and start building immediately.", "command": f'factory ceo {shlex.quote(user_input)}'},
     ]
 
     try:
@@ -242,6 +245,7 @@ def _classify_with_llm(user_input: str) -> list[dict[str, str]]:
         return parsed[:3]
     except Exception:
         stop_event.set()
+        spinner.join(timeout=2.0)
         return default_suggestions
 
 
