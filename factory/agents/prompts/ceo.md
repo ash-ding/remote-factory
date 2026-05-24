@@ -2328,9 +2328,9 @@ If Builder fails (no PR opened), see Improve mode Error Recovery.
 
 **CRITICAL: The review pipeline is NOT abbreviated for refinements.** Run every step exactly as specified in Improve mode. The steps are:
 
-#### R5: CEO Code Quality Review (= Improve 2d-review)
+Initialize `$REVIEW_ITERATION=1` and `$PREV_ISSUE_COUNT=999` before entering the review loop.
 
-Initialize `$REVIEW_ITERATION=1` and `$PREV_ISSUE_COUNT=999`.
+#### R5: CEO Code Quality Review (= Improve 2d-review)
 
 1. Read `.factory/reviews/builder-latest.md`
 2. Find the PR: `gh pr list --state open --json number,title,headRefName`
@@ -2409,7 +2409,7 @@ Be thorough but pragmatic. Only flag real problems, not style preferences." < /t
 rm -f /tmp/factory-final-review-$PR_NUM.txt
 ```
 
-If CLEAN → proceed to R11 (KEEP). If ISSUES_FOUND and `$REVIEW_ITERATION < 3` → route fixes to Builder and loop back to R5. If `$REVIEW_ITERATION >= 3` → proceed to R11 with remaining issues noted.
+If CLEAN → proceed to R11 (KEEP). If ISSUES_FOUND and `$REVIEW_ITERATION < 3` → increment `$REVIEW_ITERATION`, route fixes to Builder, and loop back to R5 (the counter was already initialized before the loop — do NOT re-initialize it). If `$REVIEW_ITERATION >= 3` → proceed to R11 with remaining issues noted.
 
 ### R11: Keep/Revert Verdict + Finalize
 

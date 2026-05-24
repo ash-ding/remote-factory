@@ -1998,6 +1998,11 @@ def cmd_ceo(args: argparse.Namespace) -> int:
             print("Error: --refine and --focus are mutually exclusive.",
                   file=sys.stderr)
             return 1
+        refine_path = Path(raw_path).expanduser().resolve()
+        if not refine_path.is_dir():
+            print("Error: --refine requires an existing project directory, not a URL or idea.",
+                  file=sys.stderr)
+            return 1
 
     _interactive_is_existing = (
         mode == "interactive"

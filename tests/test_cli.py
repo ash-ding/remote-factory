@@ -1633,6 +1633,18 @@ class TestRefineFlag:
         assert result == 1
         assert "mutually exclusive" in capsys.readouterr().err
 
+    def test_refine_requires_existing_directory(self, capsys):
+        with _mock_foreground():
+            result = main(["ceo", "/nonexistent/path", "--refine", "fix bug"])
+        assert result == 1
+        assert "existing project directory" in capsys.readouterr().err
+
+    def test_refine_rejects_url(self, capsys):
+        with _mock_foreground():
+            result = main(["ceo", "https://github.com/user/repo", "--refine", "fix bug"])
+        assert result == 1
+        assert "existing project directory" in capsys.readouterr().err
+
 
 class TestBuildCeoTaskRefine:
     """Tests for _build_ceo_task refinement mode section."""
