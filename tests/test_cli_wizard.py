@@ -9,15 +9,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from factory.cli import (
+    _ask_follow_ups,
     _classify_with_llm,
     _quick_classify,
     _show_spinner,
+    _substitute_answers,
     _welcome_wizard,
     main,
 )
 
 
-# ── TTY detection ──────────────────────────────────────────────
+# -- TTY detection --------------------------------------------------------
 
 
 class TestTTYDetection:
@@ -53,7 +55,7 @@ class TestTTYDetection:
         assert code == 1
 
 
-# ── _quick_classify ────────────────────────────────────────────
+# -- _quick_classify ------------------------------------------------------
 
 
 class TestQuickClassify:
@@ -113,13 +115,57 @@ class TestQuickClassify:
             assert user_input in s["command"]
 
 
-# ── _classify_with_llm ────────────────────────────────────────
+# -- _classify_with_llm ---------------------------------------------------
 
 
 class TestClassifyWithLLM:
     """LLM-based classification with mocked runner."""
 
-    def test_valid_json_response(self) -> None:
+    def test_valid_json_object_response(self) -> None:
+        response = {
+            "follow_ups": [
+                {"key": "path", "question": "Path to project", "type": "path", "optional": False},
+            ],
+            "suggestions": [
+                {"label": "Fix it", "explanation": "Target the issue.", "command": "factory ceo {path} --focus \"bug\""},
+                {"label": "Discuss", "explanation": "Talk first.", "command": "factory ceo {path} --mode interactive"},
+            ],
+        }
+        mock_runner = MagicMock()
+        mock_runner.headless = AsyncMock(return_value=(json.dumps(response), 0))
+
+        with patch("factory.runners.get_runner", return_value=mock_runner):
+            result = _classify_with_llm("fix a bug in my project")
+
+        assert result is not None
+        follow_ups, suggestions = result
+        assert len(follow_ups) == 1
+        assert follow_ups[0]["key"] == "path"
+        assert len(suggestions) == 2
+        assert suggestions[0]["label"] == "Fix it"
+
+    def test_valid_json_no_followups(self) -> None:
+        response = {
+            "follow_ups": [],
+            "suggestions": [
+                {"label": "Brainstorm first", "explanation": "Refine the idea.", "command": 'factory ceo "weather CLI" --mode interactive'},
+                {"label": "Build directly", "explanation": "Start building.", "command": 'factory ceo "weather CLI"'},
+            ],
+        }
+        mock_runner = MagicMock()
+        mock_runner.headless = AsyncMock(return_value=(json.dumps(response), 0))
+
+        with patch("factory.runners.get_runner", return_value=mock_runner):
+            result = _classify_with_llm("weather CLI")
+
+        assert result is not None
+        follow_ups, suggestions = result
+        assert len(follow_ups) == 0
+        assert len(suggestions) == 2
+        assert suggestions[0]["label"] == "Brainstorm first"
+
+    def test_legacy_json_array_response(self) -> None:
+        """Backward compatibility: plain JSON array still works."""
         suggestions = [
             {"label": "Brainstorm first", "explanation": "Refine the idea.", "command": 'factory ceo "weather CLI" --mode interactive'},
             {"label": "Build directly", "explanation": "Start building.", "command": 'factory ceo "weather CLI"'},
@@ -130,19 +176,23 @@ class TestClassifyWithLLM:
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("weather CLI")
 
-        assert len(result) == 2
-        assert result[0]["label"] == "Brainstorm first"
+        assert result is not None
+        follow_ups, sug = result
+        assert len(follow_ups) == 0
+        assert len(sug) == 2
 
     def test_json_with_markdown_wrapper(self) -> None:
-        raw = '```json\n[{"label": "Build it", "explanation": "Go.", "command": "factory ceo \\"test\\""}]\n```'
+        raw = '```json\n{"follow_ups": [], "suggestions": [{"label": "Build it", "explanation": "Go.", "command": "factory ceo \\"test\\""}]}\n```'
         mock_runner = MagicMock()
         mock_runner.headless = AsyncMock(return_value=(raw, 0))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("test")
 
-        assert len(result) == 1
-        assert result[0]["label"] == "Build it"
+        assert result is not None
+        _, suggestions = result
+        assert len(suggestions) == 1
+        assert suggestions[0]["label"] == "Build it"
 
     def test_invalid_json_returns_none(self) -> None:
         mock_runner = MagicMock()
@@ -168,9 +218,10 @@ class TestClassifyWithLLM:
 
         assert result is None
 
-    def test_empty_array_returns_none(self) -> None:
+    def test_empty_suggestions_returns_none(self) -> None:
+        response = {"follow_ups": [], "suggestions": []}
         mock_runner = MagicMock()
-        mock_runner.headless = AsyncMock(return_value=("[]", 0))
+        mock_runner.headless = AsyncMock(return_value=(json.dumps(response), 0))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("test idea")
@@ -178,9 +229,9 @@ class TestClassifyWithLLM:
         assert result is None
 
     def test_missing_required_fields_returns_none(self) -> None:
-        bad_suggestions = [{"label": "Test"}]  # missing command
+        response = {"follow_ups": [], "suggestions": [{"label": "Test"}]}  # missing command
         mock_runner = MagicMock()
-        mock_runner.headless = AsyncMock(return_value=(json.dumps(bad_suggestions), 0))
+        mock_runner.headless = AsyncMock(return_value=(json.dumps(response), 0))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("test idea")
@@ -188,17 +239,22 @@ class TestClassifyWithLLM:
         assert result is None
 
     def test_truncates_to_3_suggestions(self) -> None:
-        suggestions = [
-            {"label": f"Option {i}", "explanation": "desc", "command": f'factory ceo "x{i}"'}
-            for i in range(5)
-        ]
+        response = {
+            "follow_ups": [],
+            "suggestions": [
+                {"label": f"Option {i}", "explanation": "desc", "command": f'factory ceo "x{i}"'}
+                for i in range(5)
+            ],
+        }
         mock_runner = MagicMock()
-        mock_runner.headless = AsyncMock(return_value=(json.dumps(suggestions), 0))
+        mock_runner.headless = AsyncMock(return_value=(json.dumps(response), 0))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("test")
 
-        assert len(result) == 3
+        assert result is not None
+        _, suggestions = result
+        assert len(suggestions) == 3
 
     def test_wizard_shows_cli_ref_on_llm_failure(self) -> None:
         with patch("builtins.input", side_effect=["test idea"]), \
@@ -215,7 +271,7 @@ class TestClassifyWithLLM:
         assert "quick reference" in output.lower() or "factory ceo" in output
 
 
-# ── _show_spinner ──────────────────────────────────────────────
+# -- _show_spinner ---------------------------------------------------------
 
 
 class TestShowSpinner:
@@ -238,20 +294,261 @@ class TestShowSpinner:
             _show_spinner(stop)
 
 
-# ── option selection + dispatch ────────────────────────────────
+# -- _ask_follow_ups -------------------------------------------------------
+
+
+class TestAskFollowUps:
+    """Follow-up question collection and validation."""
+
+    def test_empty_follow_ups_returns_empty_dict(self) -> None:
+        result = _ask_follow_ups([], no_color=True)
+        assert result == {}
+
+    def test_path_follow_up_validates_directory(self, tmp_path: Path) -> None:
+        follow_ups = [
+            {"key": "path", "question": "Project path", "type": "path", "optional": False},
+        ]
+        with patch("builtins.input", return_value=str(tmp_path)), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result is not None
+        assert "path" in result
+        assert str(tmp_path.resolve()) in result["path"]
+
+    def test_path_follow_up_expands_tilde(self, tmp_path: Path) -> None:
+        follow_ups = [
+            {"key": "path", "question": "Project path", "type": "path", "optional": False},
+        ]
+        with patch("builtins.input", return_value=str(tmp_path)), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result is not None
+        # Resolved path should be absolute
+        import shlex
+        unquoted = shlex.split(result["path"])[0]
+        assert Path(unquoted).is_absolute()
+
+    def test_path_follow_up_rejects_nonexistent(self) -> None:
+        follow_ups = [
+            {"key": "path", "question": "Project path", "type": "path", "optional": False},
+        ]
+        with patch("builtins.input", return_value="/nonexistent/xyz/12345"), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result is None
+
+    def test_path_follow_up_empty_required_fails(self) -> None:
+        follow_ups = [
+            {"key": "path", "question": "Project path", "type": "path", "optional": False},
+        ]
+        with patch("builtins.input", return_value=""), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result is None
+
+    def test_path_follow_up_empty_optional_skips(self) -> None:
+        follow_ups = [
+            {"key": "path", "question": "Project path", "type": "path", "optional": True},
+        ]
+        with patch("builtins.input", return_value=""), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result == {}
+
+    def test_issue_follow_up_numeric(self) -> None:
+        follow_ups = [
+            {"key": "issue", "question": "Issue number", "type": "issue", "optional": False},
+        ]
+        with patch("builtins.input", return_value="42"), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result is not None
+        assert result["issue"] == "42"
+
+    def test_issue_follow_up_text(self) -> None:
+        follow_ups = [
+            {"key": "issue", "question": "Issue", "type": "issue", "optional": False},
+        ]
+        with patch("builtins.input", return_value="fix the login bug"), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result is not None
+        assert result["issue"] == '"fix the login bug"'
+
+    def test_issue_follow_up_optional_empty_skips(self) -> None:
+        follow_ups = [
+            {"key": "issue", "question": "Issue", "type": "issue", "optional": True},
+        ]
+        with patch("builtins.input", return_value=""), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result == {}
+
+    def test_text_follow_up_required(self) -> None:
+        follow_ups = [
+            {"key": "topic", "question": "Topic", "type": "text", "optional": False},
+        ]
+        with patch("builtins.input", return_value="auth system"), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result is not None
+        assert result["topic"] == "auth system"
+
+    def test_text_follow_up_required_empty_fails(self) -> None:
+        follow_ups = [
+            {"key": "topic", "question": "Topic", "type": "text", "optional": False},
+        ]
+        with patch("builtins.input", return_value=""), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result is None
+
+    def test_text_follow_up_optional_empty_skips(self) -> None:
+        follow_ups = [
+            {"key": "topic", "question": "Topic", "type": "text", "optional": True},
+        ]
+        with patch("builtins.input", return_value=""), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result == {}
+
+    def test_choice_follow_up(self) -> None:
+        follow_ups = [
+            {"key": "mode", "question": "Which mode?", "type": "choice",
+             "options": ["interactive", "build", "research"], "optional": False},
+        ]
+        with patch("builtins.input", return_value="2"), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result is not None
+        assert result["mode"] == "build"
+
+    def test_choice_follow_up_invalid_returns_none(self) -> None:
+        follow_ups = [
+            {"key": "mode", "question": "Which mode?", "type": "choice",
+             "options": ["interactive", "build"], "optional": False},
+        ]
+        with patch("builtins.input", return_value="5"), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result is None
+
+    def test_eof_during_follow_up_returns_none(self) -> None:
+        follow_ups = [
+            {"key": "path", "question": "Path", "type": "path", "optional": False},
+        ]
+        with patch("builtins.input", side_effect=EOFError), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result is None
+
+    def test_ctrl_c_during_follow_up_returns_none(self) -> None:
+        follow_ups = [
+            {"key": "path", "question": "Path", "type": "path", "optional": False},
+        ]
+        with patch("builtins.input", side_effect=KeyboardInterrupt), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result is None
+
+    def test_multiple_follow_ups(self, tmp_path: Path) -> None:
+        follow_ups = [
+            {"key": "path", "question": "Path", "type": "path", "optional": False},
+            {"key": "issue", "question": "Issue", "type": "issue", "optional": True},
+        ]
+        with patch("builtins.input", side_effect=[str(tmp_path), "42"]), \
+             patch("sys.stderr"):
+            result = _ask_follow_ups(follow_ups, no_color=True)
+
+        assert result is not None
+        assert "path" in result
+        assert result["issue"] == "42"
+
+
+# -- _substitute_answers ---------------------------------------------------
+
+
+class TestSubstituteAnswers:
+    """Placeholder substitution and suggestion filtering."""
+
+    def test_substitutes_all_keys(self) -> None:
+        suggestions = [
+            {"label": "Fix", "command": "factory ceo {path} --focus {issue}"},
+        ]
+        answers = {"path": "/tmp/proj", "issue": "42"}
+        result = _substitute_answers(suggestions, answers)
+        assert len(result) == 1
+        assert result[0]["command"] == "factory ceo /tmp/proj --focus 42"
+
+    def test_drops_suggestion_with_unfilled_placeholder(self) -> None:
+        suggestions = [
+            {"label": "Fix", "command": "factory ceo {path} --focus {issue}"},
+            {"label": "Discuss", "command": "factory ceo {path} --mode interactive"},
+        ]
+        answers = {"path": "/tmp/proj"}  # no issue
+        result = _substitute_answers(suggestions, answers)
+        assert len(result) == 1
+        assert result[0]["label"] == "Discuss"
+        assert result[0]["command"] == "factory ceo /tmp/proj --mode interactive"
+
+    def test_keeps_suggestion_without_placeholders(self) -> None:
+        suggestions = [
+            {"label": "Build", "command": 'factory ceo "my idea" --mode interactive'},
+        ]
+        answers = {}
+        result = _substitute_answers(suggestions, answers)
+        assert len(result) == 1
+        assert result[0]["command"] == 'factory ceo "my idea" --mode interactive'
+
+    def test_drops_all_if_no_answers(self) -> None:
+        suggestions = [
+            {"label": "Fix", "command": "factory ceo {path} --focus {issue}"},
+        ]
+        answers = {}
+        result = _substitute_answers(suggestions, answers)
+        assert len(result) == 0
+
+    def test_preserves_other_fields(self) -> None:
+        suggestions = [
+            {"label": "Fix", "explanation": "Target it.", "command": "factory ceo {path}", "tip": "Go!"},
+        ]
+        answers = {"path": "/tmp/proj"}
+        result = _substitute_answers(suggestions, answers)
+        assert result[0]["label"] == "Fix"
+        assert result[0]["explanation"] == "Target it."
+        assert result[0]["tip"] == "Go!"
+
+
+# -- option selection + dispatch -------------------------------------------
 
 
 class TestWizardDispatch:
     """Tests for the full wizard flow: input -> classify -> select -> dispatch."""
 
     def test_selects_default_option(self) -> None:
-        suggestions = [
-            {"label": "Option 1", "explanation": "First.", "command": 'factory ceo "test" --mode interactive'},
-        ]
+        llm_result = (
+            [],
+            [{"label": "Option 1", "explanation": "First.", "command": 'factory ceo "test" --mode interactive'}],
+        )
         with patch("builtins.input", side_effect=["test idea", ""]), \
              patch("sys.stderr") as mock_stderr, \
              patch("factory.cli._quick_classify", return_value=None), \
-             patch("factory.cli._classify_with_llm", return_value=suggestions), \
+             patch("factory.cli._classify_with_llm", return_value=llm_result), \
              patch("factory.cli.cmd_ceo", return_value=0) as mock_ceo, \
              patch("os.environ", {}):
             mock_stderr.isatty.return_value = True
@@ -261,14 +558,17 @@ class TestWizardDispatch:
         mock_ceo.assert_called_once()
 
     def test_selects_numbered_option(self) -> None:
-        suggestions = [
-            {"label": "Option 1", "explanation": "First.", "command": 'factory ceo "test"'},
-            {"label": "Option 2", "explanation": "Second.", "command": 'factory ceo "test" --mode interactive'},
-        ]
+        llm_result = (
+            [],
+            [
+                {"label": "Option 1", "explanation": "First.", "command": 'factory ceo "test"'},
+                {"label": "Option 2", "explanation": "Second.", "command": 'factory ceo "test" --mode interactive'},
+            ],
+        )
         with patch("builtins.input", side_effect=["test idea", "2"]), \
              patch("sys.stderr") as mock_stderr, \
              patch("factory.cli._quick_classify", return_value=None), \
-             patch("factory.cli._classify_with_llm", return_value=suggestions), \
+             patch("factory.cli._classify_with_llm", return_value=llm_result), \
              patch("factory.cli.cmd_ceo", return_value=0) as mock_ceo, \
              patch("os.environ", {}):
             mock_stderr.isatty.return_value = True
@@ -280,13 +580,14 @@ class TestWizardDispatch:
         assert ns.mode == "interactive"
 
     def test_invalid_choice_returns_error(self) -> None:
-        suggestions = [
-            {"label": "Option 1", "explanation": "First.", "command": 'factory ceo "test"'},
-        ]
+        llm_result = (
+            [],
+            [{"label": "Option 1", "explanation": "First.", "command": 'factory ceo "test"'}],
+        )
         with patch("builtins.input", side_effect=["test idea", "abc"]), \
              patch("sys.stderr") as mock_stderr, \
              patch("factory.cli._quick_classify", return_value=None), \
-             patch("factory.cli._classify_with_llm", return_value=suggestions), \
+             patch("factory.cli._classify_with_llm", return_value=llm_result), \
              patch("os.environ", {}):
             mock_stderr.isatty.return_value = True
             code = _welcome_wizard()
@@ -294,13 +595,14 @@ class TestWizardDispatch:
         assert code == 1
 
     def test_out_of_range_choice_returns_error(self) -> None:
-        suggestions = [
-            {"label": "Option 1", "explanation": "First.", "command": 'factory ceo "test"'},
-        ]
+        llm_result = (
+            [],
+            [{"label": "Option 1", "explanation": "First.", "command": 'factory ceo "test"'}],
+        )
         with patch("builtins.input", side_effect=["test idea", "5"]), \
              patch("sys.stderr") as mock_stderr, \
              patch("factory.cli._quick_classify", return_value=None), \
-             patch("factory.cli._classify_with_llm", return_value=suggestions), \
+             patch("factory.cli._classify_with_llm", return_value=llm_result), \
              patch("os.environ", {}):
             mock_stderr.isatty.return_value = True
             code = _welcome_wizard()
@@ -318,14 +620,19 @@ class TestWizardDispatch:
 
         assert code == 0
 
-    def test_path_placeholder_prompts_for_path(self, tmp_path: Path) -> None:
-        suggestions = [
-            {"label": "Fix it", "explanation": "Go.", "command": 'factory ceo <path> --focus "fix bug"'},
-        ]
-        with patch("builtins.input", side_effect=["fix a bug", "", str(tmp_path)]), \
+    def test_follow_up_path_fills_command(self, tmp_path: Path) -> None:
+        """Follow-up for {path} asks user and substitutes into commands."""
+        llm_result = (
+            [{"key": "path", "question": "Path to project", "type": "path", "optional": False}],
+            [
+                {"label": "Fix it", "explanation": "Go.", "command": 'factory ceo {path} --focus "fix bug"'},
+                {"label": "Discuss", "explanation": "Talk.", "command": "factory ceo {path} --mode interactive"},
+            ],
+        )
+        with patch("builtins.input", side_effect=["fix a bug", str(tmp_path), ""]), \
              patch("sys.stderr") as mock_stderr, \
              patch("factory.cli._quick_classify", return_value=None), \
-             patch("factory.cli._classify_with_llm", return_value=suggestions), \
+             patch("factory.cli._classify_with_llm", return_value=llm_result), \
              patch("factory.cli.cmd_ceo", return_value=0) as mock_ceo, \
              patch("os.environ", {}):
             mock_stderr.isatty.return_value = True
@@ -336,50 +643,71 @@ class TestWizardDispatch:
         ns = mock_ceo.call_args[0][0]
         assert str(tmp_path.resolve()) == ns.path
 
-    def test_path_placeholder_empty_returns_error(self) -> None:
-        suggestions = [
-            {"label": "Fix it", "explanation": "Go.", "command": 'factory ceo <path> --focus "fix bug"'},
-        ]
-        with patch("builtins.input", side_effect=["fix a bug", "", ""]), \
+    def test_follow_up_drops_unfilled_suggestions(self, tmp_path: Path) -> None:
+        """Suggestions with unfilled placeholders are dropped."""
+        llm_result = (
+            [
+                {"key": "path", "question": "Path", "type": "path", "optional": False},
+                {"key": "issue", "question": "Issue", "type": "issue", "optional": True},
+            ],
+            [
+                {"label": "Fix specific", "explanation": "Target.", "command": "factory ceo {path} --focus {issue}"},
+                {"label": "Discuss", "explanation": "Talk.", "command": "factory ceo {path} --mode interactive"},
+            ],
+        )
+        # User provides path but skips optional issue
+        with patch("builtins.input", side_effect=["fix a bug", str(tmp_path), "", ""]), \
              patch("sys.stderr") as mock_stderr, \
              patch("factory.cli._quick_classify", return_value=None), \
-             patch("factory.cli._classify_with_llm", return_value=suggestions), \
+             patch("factory.cli._classify_with_llm", return_value=llm_result), \
+             patch("factory.cli.cmd_ceo", return_value=0) as mock_ceo, \
              patch("os.environ", {}):
             mock_stderr.isatty.return_value = True
             code = _welcome_wizard()
 
-        assert code == 1
+        assert code == 0
+        mock_ceo.assert_called_once()
+        # The selected command should be the "Discuss" one (only surviving)
+        ns = mock_ceo.call_args[0][0]
+        assert ns.mode == "interactive"
 
-    def test_path_placeholder_nonexistent_returns_error(self) -> None:
-        suggestions = [
-            {"label": "Fix it", "explanation": "Go.", "command": 'factory ceo <path> --focus "fix bug"'},
-        ]
-        with patch("builtins.input", side_effect=["fix a bug", "", "/nonexistent/path/xyz"]), \
+    def test_follow_up_eof_exits_cleanly(self) -> None:
+        llm_result = (
+            [{"key": "path", "question": "Path", "type": "path", "optional": False}],
+            [{"label": "Fix", "explanation": "Go.", "command": "factory ceo {path}"}],
+        )
+        with patch("builtins.input", side_effect=["fix a bug", EOFError]), \
              patch("sys.stderr") as mock_stderr, \
              patch("factory.cli._quick_classify", return_value=None), \
-             patch("factory.cli._classify_with_llm", return_value=suggestions), \
-             patch("os.environ", {}):
-            mock_stderr.isatty.return_value = True
-            code = _welcome_wizard()
-
-        assert code == 1
-
-    def test_path_placeholder_eof_exits_cleanly(self) -> None:
-        suggestions = [
-            {"label": "Fix it", "explanation": "Go.", "command": 'factory ceo <path> --focus "fix bug"'},
-        ]
-        with patch("builtins.input", side_effect=["fix a bug", "", EOFError]), \
-             patch("sys.stderr") as mock_stderr, \
-             patch("factory.cli._quick_classify", return_value=None), \
-             patch("factory.cli._classify_with_llm", return_value=suggestions), \
+             patch("factory.cli._classify_with_llm", return_value=llm_result), \
              patch("os.environ", {}):
             mock_stderr.isatty.return_value = True
             code = _welcome_wizard()
 
         assert code == 0
 
+    def test_all_suggestions_dropped_shows_error(self) -> None:
+        """If follow-ups result in all suggestions being dropped, return error."""
+        llm_result = (
+            [{"key": "path", "question": "Path", "type": "path", "optional": True}],
+            [
+                {"label": "Fix", "explanation": "Go.", "command": "factory ceo {path} --focus 42"},
+            ],
+        )
+        # User skips optional path, but it's the only suggestion and it has {path}
+        with patch("builtins.input", side_effect=["fix a bug", ""]), \
+             patch("sys.stderr") as mock_stderr, \
+             patch("factory.cli._quick_classify", return_value=None), \
+             patch("factory.cli._classify_with_llm", return_value=llm_result), \
+             patch("os.environ", {}):
+            mock_stderr.isatty.return_value = True
+            mock_stderr.write = MagicMock()
+            code = _welcome_wizard()
 
-# ── edge cases ─────────────────────────────────────────────────
+        assert code == 1
+
+
+# -- edge cases ------------------------------------------------------------
 
 
 class TestWizardEdgeCases:
@@ -395,13 +723,14 @@ class TestWizardEdgeCases:
         assert code == 0
 
     def test_empty_then_valid_input(self) -> None:
-        suggestions = [
-            {"label": "Build", "explanation": "Go.", "command": 'factory ceo "test"'},
-        ]
+        llm_result = (
+            [],
+            [{"label": "Build", "explanation": "Go.", "command": 'factory ceo "test"'}],
+        )
         with patch("builtins.input", side_effect=["", "test idea", ""]), \
              patch("sys.stderr") as mock_stderr, \
              patch("factory.cli._quick_classify", return_value=None), \
-             patch("factory.cli._classify_with_llm", return_value=suggestions), \
+             patch("factory.cli._classify_with_llm", return_value=llm_result), \
              patch("factory.cli.cmd_ceo", return_value=0) as mock_ceo, \
              patch("os.environ", {}):
             mock_stderr.isatty.return_value = True
@@ -420,13 +749,14 @@ class TestWizardEdgeCases:
         assert code == 0
 
     def test_eof_on_choice_prompt(self) -> None:
-        suggestions = [
-            {"label": "Build", "explanation": "Go.", "command": 'factory ceo "test"'},
-        ]
+        llm_result = (
+            [],
+            [{"label": "Build", "explanation": "Go.", "command": 'factory ceo "test"'}],
+        )
         with patch("builtins.input", side_effect=["test", EOFError]), \
              patch("sys.stderr") as mock_stderr, \
              patch("factory.cli._quick_classify", return_value=None), \
-             patch("factory.cli._classify_with_llm", return_value=suggestions), \
+             patch("factory.cli._classify_with_llm", return_value=llm_result), \
              patch("os.environ", {}):
             mock_stderr.isatty.return_value = True
             code = _welcome_wizard()
@@ -443,13 +773,14 @@ class TestWizardEdgeCases:
         assert code == 130
 
     def test_ctrl_c_on_choice_prompt(self) -> None:
-        suggestions = [
-            {"label": "Build", "explanation": "Go.", "command": 'factory ceo "test"'},
-        ]
+        llm_result = (
+            [],
+            [{"label": "Build", "explanation": "Go.", "command": 'factory ceo "test"'}],
+        )
         with patch("builtins.input", side_effect=["test", KeyboardInterrupt]), \
              patch("sys.stderr") as mock_stderr, \
              patch("factory.cli._quick_classify", return_value=None), \
-             patch("factory.cli._classify_with_llm", return_value=suggestions), \
+             patch("factory.cli._classify_with_llm", return_value=llm_result), \
              patch("os.environ", {}):
             mock_stderr.isatty.return_value = True
             code = _welcome_wizard()
@@ -475,19 +806,20 @@ class TestWizardEdgeCases:
         assert code == 130
 
 
-# ── NO_COLOR behavior ──────────────────────────────────────────
+# -- NO_COLOR behavior -----------------------------------------------------
 
 
 class TestNOCOLOR:
     """Wizard respects NO_COLOR env var."""
 
     def test_no_color_plain_text(self, capsys: pytest.CaptureFixture[str]) -> None:
-        suggestions = [
-            {"label": "Build", "explanation": "Go.", "command": 'factory ceo "test"'},
-        ]
+        llm_result = (
+            [],
+            [{"label": "Build", "explanation": "Go.", "command": 'factory ceo "test"'}],
+        )
         with patch("builtins.input", side_effect=["test", ""]), \
              patch("factory.cli._quick_classify", return_value=None), \
-             patch("factory.cli._classify_with_llm", return_value=suggestions), \
+             patch("factory.cli._classify_with_llm", return_value=llm_result), \
              patch("factory.cli.cmd_ceo", return_value=0), \
              patch.dict("os.environ", {"NO_COLOR": "1"}):
             code = _welcome_wizard()
@@ -497,7 +829,7 @@ class TestNOCOLOR:
         assert "\033[" not in captured.err
 
 
-# ── regression: existing subcommands ───────────────────────────
+# -- regression: existing subcommands -------------------------------------
 
 
 class TestExistingSubcommands:
@@ -513,7 +845,7 @@ class TestExistingSubcommands:
         mock_wizard.assert_not_called()
 
 
-# ── banner update ──────────────────────────────────────────────
+# -- banner update ---------------------------------------------------------
 
 
 class TestBannerUpdate:
