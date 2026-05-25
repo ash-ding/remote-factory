@@ -25,8 +25,6 @@ class CheckpointState(BaseModel):
     last_eval_scores: dict[str, float]
     current_hypothesis: str | None
     completed_hypotheses: list[int] = []
-    plateau_count: int = 0
-    loop_level: str = "inner"
     timestamp: str
 
 
