@@ -410,10 +410,11 @@ In research mode, FIX is even more strongly prioritized than in standard mode �
 
 ### Outer Loop Guidance
 
-When the CEO's task includes `loop_level: "outer"`, the research metric has plateaued — prompt-level changes are no longer improving the score. Shift your hypothesis strategy:
+When the CEO's task includes `loop_level: "outer"`, the research metric has plateaued — changes within the inner surface scope are no longer improving the score. The mutable surface scope has been expanded to include the outer surfaces. Shift your hypothesis strategy:
 
-1. **Target architectural changes**, not prompt tweaks. Examples: restructure the agent pipeline, add/remove agent roles, change tool orchestration, modify data flow, introduce new retrieval strategies.
-2. **Use `outer_surfaces`** as the mutable set. The inner surfaces (prompts, configs) have been exhausted — now modify the code that defines the system's structure.
-3. **EXPLORE category is primary** in the outer loop. The inner loop has already FIXED and EXPLOITED the prompt space — the outer loop needs genuinely new approaches.
-4. **Reference the plateau** in your observations: "Inner loop plateaued at metric X after N cycles. Shifting to architectural changes."
-5. **Scope remains one-PR-per-hypothesis.** Architectural changes are still incremental — don't propose full rewrites.
+1. **Target the expanded mutable surfaces.** You now have access to the outer surfaces in addition to the inner surfaces. Generate hypotheses that modify files in the newly available outer surface set.
+2. **Do not repeat exhausted approaches.** If the inner surface scope has been exhausted, do not propose minor variations of previously reverted hypotheses on the same files. The expansion happened because those surfaces could not yield further improvement.
+3. **EXPLORE category is primary** in the outer loop. The inner loop has already FIXED and EXPLOITED the inner surface space — the outer loop needs genuinely new approaches.
+4. **Reference the plateau** in your observations: "Inner loop plateaued at metric X after N cycles. Surface scope expanded to include outer surfaces."
+5. **Scope remains one-PR-per-hypothesis.** Changes are still incremental — don't propose full rewrites.
+6. **The mechanism is the same.** The outer loop is not a different mode — it is the same research loop with a wider set of mutable surfaces. The metric, run command, and evaluation pipeline are unchanged.

@@ -12,7 +12,14 @@ from pathlib import Path
 
 import structlog
 
-from factory.models import AggregateMethod, InnerLoopConfig, ResearchTarget, ResultParseError, RunResult, RunStatus
+from factory.models import (
+    AggregateMethod,
+    InnerLoopConfig,
+    ResearchTarget,
+    ResultParseError,
+    RunResult,
+    RunStatus,
+)
 
 log = structlog.get_logger()
 
@@ -303,15 +310,15 @@ def aggregate_metric(values: list[float], method: AggregateMethod) -> float:
     """Compute a single aggregate value from multiple run metrics."""
     if not values:
         return 0.0
-    if method == AggregateMethod.MEAN:
+    if method == AggregateMethod.mean:
         return sum(values) / len(values)
-    if method == AggregateMethod.MEDIAN:
+    if method == AggregateMethod.median:
         s = sorted(values)
         mid = len(s) // 2
         if len(s) % 2 == 0:
             return (s[mid - 1] + s[mid]) / 2
         return s[mid]
-    if method == AggregateMethod.MAX:
+    if method == AggregateMethod.max:
         return max(values)
     # ALL_PASS: worst run determines the aggregate
     return min(values)
@@ -353,7 +360,7 @@ async def execute_multi_run(
 
     agg_value = aggregate_metric(values, inner_loop.aggregate) if values else 0.0
 
-    if inner_loop.aggregate == AggregateMethod.ALL_PASS:
+    if inner_loop.aggregate == AggregateMethod.all_pass:
         status = "PASS" if len(values) == n else "FAIL"
     else:
         status = "PASS" if values else "FAIL"
@@ -380,3 +387,4 @@ async def execute_multi_run(
         metric_value=agg_value,
     )
     return summary
+

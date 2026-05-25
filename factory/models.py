@@ -89,10 +89,10 @@ class ResearchTarget(BaseModel):
 class AggregateMethod(str, Enum):
     """How to aggregate multiple run metrics into a single value."""
 
-    MEAN = "mean"
-    MEDIAN = "median"
-    MAX = "max"
-    ALL_PASS = "all_pass"
+    mean = "mean"
+    median = "median"
+    max = "max"
+    all_pass = "all_pass"
 
 
 class InnerLoopConfig(BaseModel):
@@ -101,7 +101,7 @@ class InnerLoopConfig(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     runs_per_cycle: int = Field(ge=1, default=1)
-    aggregate: AggregateMethod = AggregateMethod.MEAN
+    aggregate: AggregateMethod = AggregateMethod.mean
     plateau_threshold: int = 3
     max_inner_runs_per_cycle: int | None = None
 
@@ -158,6 +158,28 @@ class ResultParseError(Exception):
     """Raised when a result file cannot be parsed to extract the target metric."""
 
 
+class TierWeights(BaseModel):
+    """Sparse within-tier weight overrides for hygiene or growth dimensions.
+
+    Only set the dimensions you want to override — unset fields (None) keep defaults.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    tests: float | None = None
+    lint: float | None = None
+    type_check: float | None = None
+    coverage: float | None = None
+    guard_patterns: float | None = None
+    config_parser: float | None = None
+    capability_surface: float | None = None
+    experiment_diversity: float | None = None
+    observability: float | None = None
+    research_grounding: float | None = None
+    factory_effectiveness: float | None = None
+    spec_compliance: float | None = None
+
+
 class FactoryConfig(BaseModel):
     """Machine-readable config stored at .factory/config.json."""
 
@@ -183,6 +205,8 @@ class FactoryConfig(BaseModel):
     cost_budget: CostBudgetConfig | None = None
     hard_constraints: list[HardConstraint] = []
     eval_spec: list[str] = []
+    hygiene_weights: TierWeights | None = None
+    growth_weights: TierWeights | None = None
 
 
 # ── eval ──────────────────────────────────────────────────────────

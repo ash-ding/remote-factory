@@ -26,6 +26,8 @@ class CheckpointState(BaseModel):
     last_eval_scores: dict[str, float]
     current_hypothesis: str | None
     completed_hypotheses: list[int] = []
+    plateau_count: int = 0
+    loop_level: Literal["inner", "outer"] = "inner"
     timestamp: str
     plateau_count: int = 0
     loop_level: Literal["inner", "outer"] = "inner"
@@ -81,5 +83,8 @@ def format_checkpoint(state: CheckpointState) -> str:
     if state.last_eval_scores:
         scores = ", ".join(f"{k}={v:.3f}" for k, v in state.last_eval_scores.items())
         lines.append(f"Eval scores:   {scores}")
+    lines.append(f"Loop level:    {state.loop_level}")
+    if state.plateau_count:
+        lines.append(f"Plateau count: {state.plateau_count}")
     lines.append(f"Timestamp:     {state.timestamp}")
     return "\n".join(lines)

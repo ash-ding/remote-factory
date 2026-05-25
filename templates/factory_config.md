@@ -75,6 +75,24 @@ main
 - project: 0.50
 -->
 
+## Hygiene Weights
+<!-- Within-tier weight overrides for hygiene dimensions. -->
+<!-- Only specify dimensions you want to change — unset dimensions keep defaults. -->
+<!-- Weights are normalized within the tier, so they don't need to sum to 1.0. -->
+<!-- Example:
+- tests: 0.40
+- coverage: 0.30
+- lint: 0.10
+-->
+
+## Growth Weights
+<!-- Within-tier weight overrides for growth dimensions. -->
+<!-- Only specify dimensions you want to change — unset dimensions keep defaults. -->
+<!-- Example:
+- capability_surface: 0.30
+- spec_compliance: 0.20
+-->
+
 ## Smoke Test
 <!-- Optional shell command that must pass before any change is kept. -->
 <!-- If configured, this runs as part of `factory precheck` — failure = mandatory revert. -->
@@ -164,3 +182,27 @@ curl -sf http://localhost:8000/health
 ## Cost Budget
 <!-- Per-cycle or total budget constraints for research experiments. -->
 <!-- Example: $5/cycle, $50 total -->
+
+## Multi-Run
+<!-- For stochastic harnesses where results vary between runs. -->
+<!-- Only used in research mode. Omit for deterministic benchmarks. -->
+<!-- Example:
+- runs_per_cycle: 3
+- aggregate: mean
+- max_runs_per_cycle: 5
+-->
+
+## Surface Scoping
+<!-- Two-tier surface structure for automatic scope escalation. -->
+<!-- Only used in research mode. Omit if all mutable surfaces should be available from the start. -->
+<!-- Inner surfaces are tried first; outer surfaces are unlocked after plateau. -->
+<!-- Example:
+- plateau_threshold: 3
+- max_escalation_cycles: 10
+- inner_surfaces:
+  - prompts/*.md
+  - config/*.yaml
+- outer_surfaces:
+  - src/agents/*.py
+  - src/orchestration/*.py
+-->

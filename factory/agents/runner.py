@@ -45,6 +45,16 @@ def reset_failure_counter() -> None:
     global _consecutive_failures
     _consecutive_failures = 0
 
+IDENTITY_REANCHOR = """\
+
+---
+
+> **⚠ CEO IDENTITY RE-ANCHOR (Sacred Rule 8)**
+> You are the Factory CEO. You orchestrate, delegate, and decide. You do NOT implement.
+> If you are about to write code, run tests, do research, or fix bugs — STOP and spawn the appropriate agent.
+> Re-read your Permitted/Forbidden Actions lists in the Identity section above.
+"""
+
 # Directory containing base agent prompts (shipped with the factory)
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
@@ -101,6 +111,7 @@ async def invoke_agent(
     model: str | None = None,
     runner_name: str | None = None,
     _track_failures: bool = True,
+    session_name: str | None = None,
 ) -> tuple[str, int]:
     """Invoke a Claude Code agent with the resolved prompt + task.
 
@@ -114,6 +125,8 @@ async def invoke_agent(
         runner_name: CLI backend to use ("claude" or "bob"). Defaults to FACTORY_RUNNER env var.
         _track_failures: If True (default), track consecutive failures globally.
             Set to False when called from invoke_agents_parallel to avoid race conditions.
+        session_name: Optional session name for /resume identification.
+            If not provided, defaults to "factory: {project_name}/{role}".
 
     Returns (stdout, return_code).
 
@@ -131,6 +144,8 @@ async def invoke_agent(
 
     runner = get_runner(runner_name, project_path=project_path)
 
+    agent_session_name = session_name or f"factory: {project_path.resolve().name}/{role}"
+
     try:
         stdout, return_code = await runner.headless(
             prompt=prompt,
@@ -140,6 +155,7 @@ async def invoke_agent(
             model=model,
             dangerously_skip_permissions=dangerously_skip_permissions,
             role=role,
+            session_name=agent_session_name,
         )
     except Exception as e:
         logger.error("%s agent failed: %s", role, e)
@@ -214,7 +230,10 @@ def _save_review(project_path: Path, role: str, output: str, return_code: int) -
 
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         header = f"# {role.title()} Agent Output\n\n- **timestamp:** {ts}\n- **exit_code:** {return_code}\n\n---\n\n"
-        review_path.write_text(header + output)
+        content = header + output
+        if role != "ceo":
+            content += IDENTITY_REANCHOR
+        review_path.write_text(content)
         logger.debug("Saved review output for %s to %s", role, review_path)
     except Exception:
         logger.debug("Failed to save review for %s", role, exc_info=True)
