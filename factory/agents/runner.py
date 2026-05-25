@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 AgentRole = Literal[
     "researcher", "strategist", "builder", "reviewer", "evaluator",
-    "archivist", "distiller", "ceo", "failure_analyst", "refiner",
+    "archivist", "distiller", "ceo", "failure_analyst", "refiner", "profiler",
 ]
 
 # Consecutive failure tracking
@@ -59,12 +59,20 @@ IDENTITY_REANCHOR = """\
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
-def resolve_prompt(role: AgentRole, project_path: Path | None = None) -> str:
+def resolve_prompt(
+    role: AgentRole,
+    project_path: Path | None = None,
+    *,
+    use_profile: bool = False,
+) -> str:
     """Resolve the prompt for an agent role.
 
     Resolution order:
     1. Project-specific override: <project>/.factory/agents/<role>.md
     2. Factory default: factory/agents/prompts/<role>.md
+
+    When *use_profile* is True, loads ~/.factory/profile.md and appends it
+    after the ACE playbook injection.
 
     Returns the prompt content as a string.
     """
@@ -79,6 +87,8 @@ def resolve_prompt(role: AgentRole, project_path: Path | None = None) -> str:
             if playbook:
                 prompt = inject_playbook(prompt, playbook)
                 logger.info("Injected playbook for %s (project override)", role)
+            if use_profile:
+                prompt = _maybe_inject_profile(prompt, role)
             return prompt
 
     # Fall back to factory default
@@ -98,6 +108,20 @@ def resolve_prompt(role: AgentRole, project_path: Path | None = None) -> str:
         prompt = inject_playbook(prompt, playbook)
         logger.info("Injected playbook for %s", role)
 
+    if use_profile:
+        prompt = _maybe_inject_profile(prompt, role)
+
+    return prompt
+
+
+def _maybe_inject_profile(prompt: str, role: str) -> str:
+    """Load and inject user profile if it exists."""
+    from factory.profile import inject_profile, load_profile
+
+    profile = load_profile()
+    if profile:
+        prompt = inject_profile(prompt, profile)
+        logger.info("Injected user profile for %s", role)
     return prompt
 
 
@@ -111,6 +135,8 @@ async def invoke_agent(
     model: str | None = None,
     runner_name: str | None = None,
     _track_failures: bool = True,
+    session_name: str | None = None,
+    use_profile: bool = False,
 ) -> tuple[str, int]:
     """Invoke a Claude Code agent with the resolved prompt + task.
 
@@ -124,6 +150,9 @@ async def invoke_agent(
         runner_name: CLI backend to use ("claude" or "bob"). Defaults to FACTORY_RUNNER env var.
         _track_failures: If True (default), track consecutive failures globally.
             Set to False when called from invoke_agents_parallel to avoid race conditions.
+        session_name: Optional session name for /resume identification.
+            If not provided, defaults to "factory: {project_name}/{role}".
+        use_profile: If True, inject user profile into the agent prompt.
 
     Returns (stdout, return_code).
 
@@ -133,13 +162,15 @@ async def invoke_agent(
     """
     global _consecutive_failures
 
-    prompt = resolve_prompt(role, project_path)
+    prompt = resolve_prompt(role, project_path, use_profile=use_profile)
 
     logger.info("Invoking %s agent for %s", role, project_path.name)
 
     _emit_safe(project_path, "agent.started", agent=role, data={"task": task[:200]})
 
     runner = get_runner(runner_name, project_path=project_path)
+
+    agent_session_name = session_name or f"factory: {project_path.resolve().name}/{role}"
 
     try:
         stdout, return_code = await runner.headless(
@@ -150,6 +181,7 @@ async def invoke_agent(
             model=model,
             dangerously_skip_permissions=dangerously_skip_permissions,
             role=role,
+            session_name=agent_session_name,
         )
     except Exception as e:
         logger.error("%s agent failed: %s", role, e)

@@ -12,7 +12,7 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 
-from factory.cli import main, build_parser, _is_github_url, _slugify, _extract_project_name, _dedupe_project_path, _resolve_input, _persist_spec, _has_research_target, _build_ceo_task, _ensure_repo
+from factory.cli import main, build_parser, _is_github_url, _slugify, _extract_project_name, _dedupe_project_path, _resolve_input, _persist_spec, _has_research_target, _build_ceo_task, _ensure_repo, _quick_classify, _welcome_wizard
 from factory.models import ExperimentRecord
 from factory.store import ExperimentStore
 
@@ -1362,6 +1362,83 @@ class TestBuildCeoTaskInteractive:
         assert "Mode: build" in task
 
 
+class TestProfileParser:
+    def test_profile_build_subcommand(self):
+        parser = build_parser()
+        args = parser.parse_args(["profile", "build"])
+        assert args.command == "profile"
+        assert args.profile_command == "build"
+
+    def test_profile_build_with_paths(self):
+        parser = build_parser()
+        args = parser.parse_args(["profile", "build", "/path/a", "/path/b"])
+        assert args.paths == ["/path/a", "/path/b"]
+
+    def test_profile_build_dry_run(self):
+        parser = build_parser()
+        args = parser.parse_args(["profile", "build", "--dry-run"])
+        assert args.dry_run is True
+
+    def test_profile_show_subcommand(self):
+        parser = build_parser()
+        args = parser.parse_args(["profile", "show"])
+        assert args.profile_command == "show"
+
+    def test_use_profile_flag_on_ceo(self):
+        parser = build_parser()
+        args = parser.parse_args(["ceo", "/path", "--use-profile"])
+        assert args.use_profile is True
+
+    def test_use_profile_flag_default_false_ceo(self):
+        parser = build_parser()
+        args = parser.parse_args(["ceo", "/path"])
+        assert args.use_profile is False
+
+    def test_use_profile_flag_on_run(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "/path", "--use-profile"])
+        assert args.use_profile is True
+
+    def test_use_profile_flag_on_agent(self):
+        parser = build_parser()
+        args = parser.parse_args([
+            "agent", "researcher", "--task", "test", "--project", "/p", "--use-profile",
+        ])
+        assert args.use_profile is True
+
+
+class TestCmdProfile:
+    def test_profile_show_no_file(self, capsys):
+        with patch("factory.profile._PROFILE_PATH", Path("/nonexistent/profile.md")):
+            result = main(["profile", "show"])
+        assert result == 1
+        assert "No profile found" in capsys.readouterr().out
+
+    def test_profile_show_with_file(self, tmp_path, capsys):
+        profile_path = tmp_path / "profile.md"
+        profile_path.write_text("---\ngenerated: 2024\n---\n\nTest profile")
+        with patch("factory.profile._PROFILE_PATH", profile_path):
+            result = main(["profile", "show"])
+        assert result == 0
+        assert "Test profile" in capsys.readouterr().out
+
+    def test_profile_no_subcommand(self, capsys):
+        result = main(["profile"])
+        assert result == 1
+
+    def test_profile_build_dry_run(self, tmp_path, capsys):
+        proj = tmp_path / "myproj"
+        factory_dir = proj / ".factory"
+        factory_dir.mkdir(parents=True)
+        (factory_dir / "results.tsv").write_text("id\thyp\tverdict\n1\ttest-hyp\tkeep\n")
+        result = main(["profile", "build", "--dry-run", str(proj)])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "experiment_history" in out
+        assert "test-hyp" in out
+        assert "ceo_verdicts" in out
+
+
 class TestCmdHomeReturnsFactoryDir:
     def test_cmd_home_returns_package_root(self, capsys):
         from factory.cli import cmd_home
@@ -1676,3 +1753,139 @@ class TestRefinerPromptExists:
         content = prompt_path.read_text()
         assert "Tier" in content, "refiner.md should reference Tier classification"
         assert "Builder" in content or "builder" in content, "refiner.md should reference the Builder agent"
+class TestWizardLongInputRedirect:
+    """Tests for wizard long-input redirect to ~/.factory/wizard_input.md."""
+
+    def _make_input_fn(self, first_response):
+        """Return an input() replacement that returns first_response then raises EOFError."""
+        call_count = 0
+
+        def _input(prompt=""):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return first_response
+            raise EOFError
+
+        return _input
+
+    def test_long_input_triggers_file_write(self, tmp_path, monkeypatch):
+        """Input >200 chars is written to ~/.factory/wizard_input.md with matching content."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+        wizard_file = fake_home / ".factory" / "wizard_input.md"
+
+        long_input = "a" * 250
+        monkeypatch.setattr("builtins.input", self._make_input_fn(long_input))
+
+        _welcome_wizard()
+
+        assert wizard_file.exists()
+        assert wizard_file.read_text() == long_input
+
+    def test_short_input_no_file_written(self, tmp_path, monkeypatch):
+        """Input <=200 chars does NOT write a file."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+        wizard_file = fake_home / ".factory" / "wizard_input.md"
+
+        short_input = "Build a weather CLI"
+        monkeypatch.setattr("builtins.input", self._make_input_fn(short_input))
+
+        with patch("factory.cli._classify_with_llm", return_value=([], [
+            {"label": "Build", "explanation": "Build it.", "command": "factory ceo 'Build a weather CLI' --mode build"},
+        ])):
+            _welcome_wizard()
+
+        assert not wizard_file.exists()
+
+    def test_long_path_not_redirected(self, tmp_path, monkeypatch):
+        """A long string that is an existing directory is NOT redirected."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+        wizard_file = fake_home / ".factory" / "wizard_input.md"
+
+        long_dir = tmp_path / ("a" * 210)
+        long_dir.mkdir()
+
+        monkeypatch.setattr("builtins.input", self._make_input_fn(str(long_dir)))
+
+        _welcome_wizard()
+
+        assert not wizard_file.exists()
+
+    def test_long_url_not_redirected(self, tmp_path, monkeypatch):
+        """A long GitHub URL is NOT redirected."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+        wizard_file = fake_home / ".factory" / "wizard_input.md"
+
+        long_url = "https://github.com/user/" + "r" * 200
+        monkeypatch.setattr("builtins.input", self._make_input_fn(long_url))
+
+        _welcome_wizard()
+
+        assert not wizard_file.exists()
+
+    def test_wizard_file_inside_factory_dir(self, tmp_path, monkeypatch):
+        """The written file is inside ~/.factory/."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+
+        long_input = "x" * 250
+        monkeypatch.setattr("builtins.input", self._make_input_fn(long_input))
+
+        _welcome_wizard()
+
+        wizard_file = fake_home / ".factory" / "wizard_input.md"
+        assert wizard_file.exists()
+        assert wizard_file.parent == fake_home / ".factory"
+
+
+class TestQuickClassifyWizardFile:
+    """Tests for _quick_classify returning two options for wizard-generated files."""
+
+    def test_wizard_file_returns_two_options(self, tmp_path, monkeypatch):
+        """_quick_classify returns build and interactive options for wizard_input.md."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+        wizard_file = fake_home / ".factory" / "wizard_input.md"
+        wizard_file.parent.mkdir(parents=True)
+        wizard_file.write_text("some long idea text")
+
+        result = _quick_classify(str(wizard_file))
+        assert result is not None
+        assert len(result) == 2
+        assert result[0]["label"] == "Build from this idea"
+        assert "--mode build" in result[0]["command"]
+        assert result[1]["label"] == "Brainstorm and refine first"
+        assert "--mode interactive" in result[1]["command"]
+
+    def test_regular_file_returns_one_option(self, tmp_path):
+        """_quick_classify returns one option for a regular spec file."""
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("# My project spec")
+
+        result = _quick_classify(str(spec_file))
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["label"] == "Build from this spec file"
+
+    def test_wizard_file_with_tilde_path(self, tmp_path, monkeypatch):
+        """_quick_classify handles ~/. factory/wizard_input.md with tilde expansion."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+        wizard_file = fake_home / ".factory" / "wizard_input.md"
+        wizard_file.parent.mkdir(parents=True)
+        wizard_file.write_text("idea content")
+
+        result = _quick_classify("~/.factory/wizard_input.md")
+        assert result is not None
+        assert len(result) == 2

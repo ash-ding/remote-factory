@@ -10,6 +10,7 @@ import re
 import shlex
 import signal
 import subprocess
+import structlog
 import sys
 import tempfile
 import threading
@@ -17,6 +18,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+log = structlog.get_logger()
+_WIZARD_INPUT_PATH = Path("~/.factory/wizard_input.md")
 
 if TYPE_CHECKING:
     from factory.messages import Message
@@ -175,6 +179,11 @@ def _quick_classify(user_input: str) -> list[dict[str, str]] | None:
         ]
 
     if _safe_is_file(expanded):
+        if expanded == _WIZARD_INPUT_PATH.expanduser():
+            return [
+                {"label": "Build from this idea", "explanation": "Build the project directly.", "command": f'factory ceo {shlex.quote(stripped)} --mode build'},
+                {"label": "Brainstorm and refine first", "explanation": "Discuss and refine the idea interactively.", "command": f'factory ceo {shlex.quote(stripped)} --mode interactive'},
+            ]
         return [
             {"label": "Build from this spec file", "explanation": "Use the file as a project specification.", "command": f'factory ceo {shlex.quote(stripped)} --mode build'},
         ]
@@ -551,6 +560,20 @@ def _welcome_wizard() -> int:
             return 130
         if not user_input:
             return 0
+
+    # -- long-input redirect -----------------------------------------------
+    _expanded_check = Path(user_input).expanduser()
+    if (
+        len(user_input) > 200
+        and not _safe_is_dir(_expanded_check)
+        and not _safe_is_file(_expanded_check)
+        and not _is_github_url(user_input)
+    ):
+        wizard_file = _WIZARD_INPUT_PATH.expanduser()
+        wizard_file.parent.mkdir(parents=True, exist_ok=True)
+        wizard_file.write_text(user_input)
+        log.info("wizard.long_input_redirect", file=str(wizard_file), length=len(user_input))
+        user_input = str(wizard_file)
 
     # -- classification ---------------------------------------------------
     follow_ups: list[dict[str, object]] = []
@@ -1951,6 +1974,60 @@ def cmd_install(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_profile(args: argparse.Namespace) -> int:
+    """Manage the user profile at ~/.factory/profile.md."""
+    sub = getattr(args, "profile_command", None)
+    if not sub:
+        print("Usage: factory profile {build,show}")
+        return 1
+
+    if sub == "show":
+        from factory.profile import load_profile
+        profile = load_profile()
+        if profile is None:
+            print("No profile found. Run 'factory profile build' first.")
+            return 1
+        print(profile)
+        return 0
+
+    if sub == "build":
+        from factory.profile import collect_evidence, save_profile, synthesize_profile
+        from factory.registry import get_project_paths
+
+        raw_paths = getattr(args, "paths", None)
+        if raw_paths:
+            project_paths = [Path(p).resolve() for p in raw_paths]
+        else:
+            project_paths = get_project_paths()
+            if not project_paths:
+                print("No registered projects found. Pass project paths explicitly.", file=sys.stderr)
+                return 1
+
+        evidence = collect_evidence(project_paths)
+        dry_run = getattr(args, "dry_run", False)
+
+        if dry_run:
+            for section, content in evidence.items():
+                print(f"\n{'=' * 60}")
+                print(f"  {section}")
+                print(f"{'=' * 60}")
+                print(content or "(empty)")
+            return 0
+
+        runner_name = _resolve_runner(args)
+        profile_text = _run(synthesize_profile(evidence, runner_name))
+        if profile_text.startswith("Profile synthesis failed"):
+            print(profile_text, file=sys.stderr)
+            return 1
+        source_names = [p.name for p in project_paths]
+        path = save_profile(profile_text, source_names, runner_name or "claude")
+        print(f"Profile written to {path}")
+        return 0
+
+    print(f"Unknown profile subcommand: {sub}", file=sys.stderr)
+    return 1
+
+
 def cmd_agent(args: argparse.Namespace) -> int:
     """Invoke a specialist agent with the given task."""
     from factory.agents.runner import invoke_agent
@@ -1965,6 +2042,7 @@ def cmd_agent(args: argparse.Namespace) -> int:
     timeout = getattr(args, "timeout", 600.0)
     model = _resolve_model(args)
     runner = _resolve_runner(args)
+    use_profile = getattr(args, "use_profile", False)
 
     result, code = _run(invoke_agent(
         role,
@@ -1974,6 +2052,7 @@ def cmd_agent(args: argparse.Namespace) -> int:
         dangerously_skip_permissions=True,
         model=model,
         runner_name=runner,
+        use_profile=use_profile,
     ))
     print(result)
     return code
@@ -2150,6 +2229,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     branch = getattr(args, "branch", None)
     model = _resolve_model(args)
     runner_name = _resolve_runner(args)
+    use_profile = getattr(args, "use_profile", False)
 
     if mode == "research" and not research_ideation and not _has_research_target(project_path):
         print("Error: --mode research requires research_target in factory.md. "
@@ -2212,6 +2292,8 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         refine_request=refine_request,
     )
 
+    session_name = f"factory: {project_path.resolve().name}"
+
     if headless:
         # Non-interactive pipe mode (for scripting, cron, tmux)
         # Uses completion guard to auto-resume on premature exit
@@ -2225,6 +2307,8 @@ def cmd_ceo(args: argparse.Namespace) -> int:
                 runner_name=runner_name,
                 model=model,
                 timeout=7200.0,
+                session_name=session_name,
+                use_profile=use_profile,
             ))
             print(result)
             if code == 0:
@@ -2236,7 +2320,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
                 project_path, focus=focus,
                 min_growth=min_growth, max_new=max_new, branch=branch,
                 already_improved=mode in ("improve", "meta") or discover_only,
-                model=model, no_github=no_github,
+                model=model, no_github=no_github, use_profile=use_profile,
             )
         finally:
             remove_worktree(project_path, wt_path, wt_branch)
@@ -2249,11 +2333,12 @@ def cmd_ceo(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             mark_read(project_path, pending_ids)
-        prompt = resolve_prompt("ceo", wt_path)
+        prompt = resolve_prompt("ceo", wt_path, use_profile=use_profile)
         runner = get_runner(runner_name)
         return runner.interactive_run(
             prompt, task, wt_path,
-            model=model, role="ceo", dangerously_skip_permissions=True
+            model=model, role="ceo", dangerously_skip_permissions=True,
+            session_name=session_name,
         )
     finally:
         remove_worktree(project_path, wt_path, wt_branch)
@@ -2901,6 +2986,7 @@ def _chain_modes(
     max_chains: int = 3,
     model: str | None = None,
     no_github: bool = False,
+    use_profile: bool = False,
 ) -> int:
     """After a cycle completes, re-detect state and chain into the next mode.
 
@@ -2927,7 +3013,7 @@ def _chain_modes(
         code = _run_single_cycle(
             project_path, next_mode, focus=focus,
             min_growth=min_growth, max_new=max_new, branch=branch,
-            no_github=no_github, model=model,
+            no_github=no_github, model=model, use_profile=use_profile,
         )
         if code != 0:
             return code
@@ -2948,6 +3034,7 @@ def _run_single_cycle(
     model: str | None = None,
     issue_number: int | None = None,
     issue_url: str | None = None,
+    use_profile: bool = False,
 ) -> int:
     """Execute a single factory run cycle via the CEO agent. Returns 0 on success, 1 on error."""
     from factory.agents.runner import invoke_agent
@@ -2982,6 +3069,7 @@ def _run_single_cycle(
             timeout=7200.0,
             dangerously_skip_permissions=True,
             model=model,
+            use_profile=use_profile,
         ))
 
         if code == 0:
@@ -3011,6 +3099,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     max_new = getattr(args, "max_new", None)
     branch = getattr(args, "branch", None)
     model = _resolve_model(args)
+    use_profile_flag = getattr(args, "use_profile", False)
 
     if prompt_file:
         context = _read_prompt_file(project_path, prompt_file)
@@ -3064,6 +3153,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             discover_only=discover_only, no_github=no_github, model=model,
             issue_number=issue_number,
             issue_url=issue_url,
+            use_profile=use_profile_flag,
             **budget_kwargs,
         )
         if code != 0:
@@ -3071,7 +3161,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         return _chain_modes(
             project_path, focus=focus, already_improved=skip_improve,
             min_growth=min_growth, max_new=max_new, branch=branch,
-            model=model, no_github=no_github,
+            model=model, no_github=no_github, use_profile=use_profile_flag,
         )
 
     # Heartbeat loop mode
@@ -3100,12 +3190,13 @@ def cmd_run(args: argparse.Namespace) -> int:
                 discover_only=discover_only, no_github=no_github, model=model,
                 issue_number=issue_number,
                 issue_url=issue_url,
+                use_profile=use_profile_flag,
                 **budget_kwargs,
             )
             _chain_modes(
                 project_path, focus=focus, already_improved=skip_improve,
                 min_growth=min_growth, max_new=max_new, branch=branch,
-                model=model, no_github=no_github,
+                model=model, no_github=no_github, use_profile=use_profile_flag,
             )
             _emit_cli_event(project_path, "cycle.completed", {"cycle": cycle, "mode": mode})
 
@@ -3443,6 +3534,18 @@ def build_parser() -> argparse.ArgumentParser:
     config_sub.add_parser("edit", help="Open config.toml in $EDITOR")
     config_sub.add_parser("migrate", help="Create starter config.toml from current env vars")
 
+    # profile — user profile management
+    profile_parser = sub.add_parser("profile", help="Manage the user profile at ~/.factory/profile.md")
+    profile_sub = profile_parser.add_subparsers(dest="profile_command")
+    p_build = profile_sub.add_parser("build", help="Collect evidence and synthesize user profile")
+    p_build.add_argument("paths", nargs="*", default=None,
+                         help="Project paths to collect evidence from (default: all registered)")
+    p_build.add_argument("--dry-run", action="store_true", default=False,
+                         help="Print collected evidence without running LLM synthesis")
+    p_build.add_argument("--runner", choices=["claude", "bob", "codex"], default=None,
+                         help="CLI backend to use for synthesis")
+    profile_sub.add_parser("show", help="Print the current user profile")
+
     # emit — emit a structured event to .factory/events.jsonl
     p = sub.add_parser("emit", help="Emit a structured event to .factory/events.jsonl")
     p.add_argument("event_type", help="Event type (e.g. agent.started, agent.completed)")
@@ -3466,6 +3569,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="CLI backend to use (default: FACTORY_RUNNER env var, or 'claude')")
     p.add_argument("--profile", default=None,
                     help="Credential profile from ~/.factory/config.toml")
+    p.add_argument("--use-profile", action="store_true", default=False,
+                    help="Inject user profile (~/.factory/profile.md) into the agent prompt")
 
     # ceo — launch the Factory CEO agent directly
     p = sub.add_parser("ceo", help="Launch the Factory CEO agent (interactive by default)")
@@ -3525,6 +3630,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Refinement mode: classify and implement a user-directed change. "
              "Mutually exclusive with --mode interactive, --mode research, --mode meta, --prompt, --focus",
     )
+    p.add_argument("--use-profile", action="store_true", default=False,
+                    help="Inject user profile (~/.factory/profile.md) into agent prompts")
 
     # run
     p = sub.add_parser("run", help="Run factory cycle (delegates to CEO agent)")
@@ -3579,6 +3686,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="CLI backend to use (default: FACTORY_RUNNER env var, or 'claude')")
     p.add_argument("--profile", default=None,
                     help="Credential profile from ~/.factory/config.toml")
+    p.add_argument("--use-profile", action="store_true", default=False,
+                    help="Inject user profile (~/.factory/profile.md) into agent prompts")
 
     # tmux — launch factory run in a detached tmux session
     p = sub.add_parser("tmux", help="Launch factory run in a detached tmux session")
@@ -3674,6 +3783,7 @@ def main(argv: list[str] | None = None) -> int:
         "serve-mcp": cmd_serve_mcp,
         "dashboard": cmd_dashboard,
         "config": cmd_config,
+        "profile": cmd_profile,
         "emit": cmd_emit,
         "agent": cmd_agent,
         "ceo": cmd_ceo,
