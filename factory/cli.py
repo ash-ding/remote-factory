@@ -1580,6 +1580,57 @@ def cmd_validate_research(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_refine_status(args: argparse.Namespace) -> int:
+    """Print refinement state and regrounding output."""
+    from factory.refine_state import format_status, read_state
+
+    project_path = Path(args.path).resolve()
+    state = read_state(project_path)
+    print(format_status(state))
+    return 0
+
+
+def cmd_refine_begin(args: argparse.Namespace) -> int:
+    """Record a new refinement entry and emit regrounding output."""
+    from factory.refine_state import begin_refinement, format_begin
+
+    project_path = Path(args.path).resolve()
+    request = (args.request or "").strip()
+    if not request:
+        print("Error: --request must not be empty.", file=sys.stderr)
+        return 1
+    entry = begin_refinement(project_path, request)
+    _emit_cli_event(project_path, "refine.begin", {
+        "sequence": entry.sequence,
+        "request": request[:200],
+    })
+    print(format_begin(entry))
+    return 0
+
+
+def cmd_refine_complete(args: argparse.Namespace) -> int:
+    """Update the last refinement entry with a verdict."""
+    from factory.refine_state import complete_refinement, read_state
+
+    project_path = Path(args.path).resolve()
+    verdict = args.verdict
+    state = read_state(project_path)
+    if not state.entries:
+        print("Warning: no refinement entries found — nothing to complete.", file=sys.stderr)
+        return 1
+    last = state.entries[-1]
+    mutated = complete_refinement(project_path, verdict)
+    if not mutated:
+        print(f"Warning: refinement #{last.sequence} is already completed.", file=sys.stderr)
+        return 1
+    _emit_cli_event(project_path, "refine.complete", {
+        "sequence": last.sequence,
+        "verdict": verdict,
+    })
+    print(f"Refinement #{last.sequence} completed — verdict: {verdict}")
+    return 0
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     """Format and optionally post a review on a GitHub PR."""
     from factory.review import ReviewPayload, format_review, post_review
@@ -2062,6 +2113,25 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         return 1
 
     no_github = getattr(args, "no_github", False)
+    refine_request = getattr(args, "refine", None)
+
+    if refine_request:
+        if mode and mode != "auto":
+            print(f"Error: --refine and --mode {mode} are mutually exclusive.",
+                  file=sys.stderr)
+            return 1
+        if prompt_file:
+            print("Error: --refine and --prompt are mutually exclusive.",
+                  file=sys.stderr)
+            return 1
+        if focus:
+            print("Error: --refine and --focus are mutually exclusive.",
+                  file=sys.stderr)
+            return 1
+        if not Path(raw_path).expanduser().resolve().is_dir():
+            print("Error: --refine requires an existing project directory, not a URL or idea.",
+                  file=sys.stderr)
+            return 1
 
     _interactive_is_existing = (
         mode == "interactive"
@@ -2219,6 +2289,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         messages=pending,
         issue_number=issue_number,
         issue_url=issue_url,
+        refine_request=refine_request,
     )
 
     session_name = f"factory: {project_path.resolve().name}"
@@ -2718,6 +2789,7 @@ def _build_ceo_task(
     messages: list[Message] | None = None,
     issue_number: int | None = None,
     issue_url: str | None = None,
+    refine_request: str | None = None,
 ) -> str:
     """Build the CEO agent task string from mode and optional context."""
     task = f"Project: {project_path}\nMode: {mode}"
@@ -2883,6 +2955,22 @@ def _build_ceo_task(
             "- Clone from GitHub URLs\n\n"
             "Work locally only. When a GitHub operation would normally occur, "
             "skip it and note what was skipped in the experiment log."
+        )
+
+    if refine_request:
+        task += (
+            f"\n\n## Refinement Mode\n\n"
+            f"**User's refinement request:** {refine_request}\n\n"
+            f"You are in Refinement mode. Follow the `Mode: Refine` section in your "
+            f"system prompt. The pipeline is:\n\n"
+            f"1. Spawn the Refiner agent to classify and scope the request\n"
+            f"2. If Tier 3 → exit, tell user to use full Improve mode\n"
+            f"3. Begin experiment, create GitHub issue from Refiner's scoped task\n"
+            f"4. Spawn Builder with the Refiner's task description\n"
+            f"5. Run the FULL review pipeline (2d-review through 2h-final) — identical to Improve mode\n"
+            f"6. Keep/revert verdict + finalize\n"
+            f"7. Archivist (single batch)\n\n"
+            f"Do NOT skip the review pipeline. Do NOT abbreviate any step.\n"
         )
 
     return task
@@ -3341,6 +3429,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--similarity-threshold", type=float, default=0.6,
                     help="Similarity threshold for anti-pattern detection (default: 0.6)")
 
+    # refine-status
+    p = sub.add_parser("refine-status", help="Print refinement state and regrounding output")
+    p.add_argument("path", help="Path to the project")
+
+    # refine-begin
+    p = sub.add_parser("refine-begin", help="Record a new refinement and emit regrounding output")
+    p.add_argument("path", help="Path to the project")
+    p.add_argument("--request", required=True, help="Summary of the user's refinement request")
+
+    # refine-complete
+    p = sub.add_parser("refine-complete", help="Complete the current refinement with a verdict")
+    p.add_argument("path", help="Path to the project")
+    p.add_argument("--verdict", required=True, choices=["keep", "revert", "error", "tier3_exit"],
+                    help="Refinement verdict")
+
     # review
     p = sub.add_parser("review", help="Format and post a structured review on a GitHub PR")
     p.add_argument("--verdict", required=True, choices=["keep", "revert", "KEEP", "REVERT"],
@@ -3454,7 +3557,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("agent", help="Invoke a specialist agent with a task")
     p.add_argument("role", choices=["researcher", "strategist", "builder", "reviewer",
                                      "evaluator", "archivist", "distiller", "ceo",
-                                     "failure_analyst"],
+                                     "failure_analyst", "refiner"],
                     help="Agent role to invoke")
     p.add_argument("--task", required=True, help="Task description for the agent")
     p.add_argument("--project", required=True, help="Path to the project")
@@ -3522,6 +3625,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="CLI backend to use (default: FACTORY_RUNNER env var, or 'claude')")
     p.add_argument("--profile", default=None,
                     help="Credential profile from ~/.factory/config.toml")
+    p.add_argument(
+        "--refine", default=None, metavar="REQUEST",
+        help="Refinement mode: classify and implement a user-directed change. "
+             "Mutually exclusive with --mode interactive, --mode research, --mode meta, --prompt, --focus",
+    )
     p.add_argument("--use-profile", action="store_true", default=False,
                     help="Inject user profile (~/.factory/profile.md) into agent prompts")
 
@@ -3661,6 +3769,9 @@ def main(argv: list[str] | None = None) -> int:
         "precheck": cmd_precheck,
         "leakage-check": cmd_leakage_check,
         "validate-research": cmd_validate_research,
+        "refine-status": cmd_refine_status,
+        "refine-begin": cmd_refine_begin,
+        "refine-complete": cmd_refine_complete,
         "review": cmd_review,
         "checkpoint": cmd_checkpoint,
         "resume": cmd_resume,
