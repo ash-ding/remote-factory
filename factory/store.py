@@ -3,6 +3,7 @@
 import csv
 import io
 import json
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -182,8 +183,6 @@ def _parse_inner_loop(text: str) -> InnerLoopConfig | None:
     Returns None when the section is absent or contains no recognised keys.
     """
     # Extract the ## Multi-Run section from the full factory.md text
-    import re
-
     match = re.search(
         r"^##\s+Multi[_\s-]?Run\b(.*?)(?=^##\s|\Z)",
         text,
@@ -227,8 +226,6 @@ def _parse_outer_loop(text: str) -> OuterLoopConfig | None:
     ``inner_surfaces``, ``outer_surfaces``.
     Returns None when the section is absent or contains no recognised keys.
     """
-    import re
-
     match = re.search(
         r"^##\s+Surface[_\s-]?Scoping\b(.*?)(?=^##\s|\Z)",
         text,
@@ -620,7 +617,7 @@ class ExperimentStore:
                 "Run 'factory init --reparse' to regenerate it from factory.md."
             ) from exc
         try:
-            return FactoryConfig.model_validate(data, strict=False)
+            return FactoryConfig.model_validate(data, strict=False)  # strict=False needed to coerce enum strings from JSON (e.g. AggregateMethod)
         except (ValidationError, TypeError, KeyError) as exc:
             raise ValueError(
                 f"{config_path} failed validation: {exc}. "

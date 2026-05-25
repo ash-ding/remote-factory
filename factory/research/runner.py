@@ -327,7 +327,6 @@ async def execute_multi_run(
     Returns the aggregated score as a float.
     """
     import statistics
-    import subprocess as sp
 
     n = config.runs_per_cycle
     scores: list[float] = []
@@ -337,27 +336,39 @@ async def execute_multi_run(
 
     for i in range(n):
         try:
-            result = sp.run(
+            proc = await asyncio.create_subprocess_shell(
                 run_cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=3600,
                 cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-        except sp.TimeoutExpired:
+            stdout_bytes, _ = await asyncio.wait_for(
+                proc.communicate(), timeout=3600
+            )
+        except asyncio.TimeoutError:
             log.warning("multi_run_timeout", run=i + 1)
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                proc.kill()
+            await proc.wait()
+            scores.append(0.0)
+            all_ok = False
+            continue
+        except OSError:
+            log.warning("multi_run_os_error", run=i + 1)
             scores.append(0.0)
             all_ok = False
             continue
 
-        if result.returncode != 0:
-            log.warning("multi_run_nonzero_exit", run=i + 1, returncode=result.returncode)
+        if proc.returncode != 0:
+            log.warning("multi_run_nonzero_exit", run=i + 1, returncode=proc.returncode)
             scores.append(0.0)
             all_ok = False
             continue
 
-        stdout = result.stdout.strip()
+        stdout = stdout_bytes.decode(errors="replace").strip()
         try:
             score = float(stdout)
         except ValueError:

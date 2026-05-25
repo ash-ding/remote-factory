@@ -365,6 +365,16 @@ class TestInnerLoopConfig:
         with pytest.raises(Exception):
             InnerLoopConfig(runs_per_cycle="not_an_int")  # type: ignore[arg-type]
 
+    def test_rejects_zero_runs_per_cycle(self):
+        """runs_per_cycle must be >= 1."""
+        with pytest.raises(Exception):
+            InnerLoopConfig(runs_per_cycle=0)
+
+    def test_rejects_negative_runs_per_cycle(self):
+        """runs_per_cycle must be >= 1."""
+        with pytest.raises(Exception):
+            InnerLoopConfig(runs_per_cycle=-1)
+
     def test_roundtrip_json(self):
         c = InnerLoopConfig(runs_per_cycle=3, aggregate=AggregateMethod.max)
         data = c.model_dump()
@@ -399,6 +409,16 @@ class TestOuterLoopConfig:
     def test_strict_mode(self):
         with pytest.raises(Exception):
             OuterLoopConfig(plateau_threshold="not_an_int")  # type: ignore[arg-type]
+
+    def test_rejects_zero_plateau_threshold(self):
+        """plateau_threshold must be >= 1."""
+        with pytest.raises(Exception):
+            OuterLoopConfig(plateau_threshold=0)
+
+    def test_rejects_negative_plateau_threshold(self):
+        """plateau_threshold must be >= 1."""
+        with pytest.raises(Exception):
+            OuterLoopConfig(plateau_threshold=-1)
 
     def test_roundtrip_json(self):
         c = OuterLoopConfig(

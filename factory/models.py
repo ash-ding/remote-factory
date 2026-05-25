@@ -7,7 +7,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ── project state ─────────────────────────────────────────────────
@@ -157,7 +157,7 @@ class InnerLoopConfig(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
-    runs_per_cycle: int = 1
+    runs_per_cycle: int = Field(default=1, ge=1)
     aggregate: AggregateMethod = AggregateMethod.mean
     max_runs_per_cycle: int | None = None
 
@@ -167,7 +167,7 @@ class OuterLoopConfig(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
-    plateau_threshold: int = 3
+    plateau_threshold: int = Field(default=3, ge=1)
     max_escalation_cycles: int | None = None
     inner_surfaces: list[str] = []
     outer_surfaces: list[str] = []

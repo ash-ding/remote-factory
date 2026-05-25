@@ -389,3 +389,35 @@ class TestCheckpointExtensions:
         )
         output = format_checkpoint(state)
         assert "research" in output
+        assert "Loop level:    outer" in output
+        assert "Plateau count: 2" in output
+
+    def test_format_checkpoint_omits_zero_plateau(self) -> None:
+        state = CheckpointState(
+            mode="research",
+            active_experiment_id=None,
+            completed_agents=[],
+            pending_agents=[],
+            last_eval_scores={},
+            current_hypothesis=None,
+            plateau_count=0,
+            loop_level="inner",
+            timestamp="2026-05-24T00:00:00",
+        )
+        output = format_checkpoint(state)
+        assert "Loop level:    inner" in output
+        assert "Plateau count" not in output
+
+    def test_loop_level_rejects_invalid(self) -> None:
+        """loop_level only accepts 'inner' or 'outer'."""
+        with pytest.raises(Exception):
+            CheckpointState(
+                mode="research",
+                active_experiment_id=None,
+                completed_agents=[],
+                pending_agents=[],
+                last_eval_scores={},
+                current_hypothesis=None,
+                loop_level="invalid",
+                timestamp="2026-05-24T00:00:00",
+            )
