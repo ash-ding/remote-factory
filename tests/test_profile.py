@@ -109,9 +109,9 @@ class TestSaveProfile:
         with patch("factory.profile._PROFILE_PATH", profile_path):
             save_profile("content", ["a", "b", "c"], "bob")
         text = profile_path.read_text()
-        assert "  - a\n" in text
-        assert "  - b\n" in text
-        assert "  - c\n" in text
+        assert '  - "a"\n' in text
+        assert '  - "b"\n' in text
+        assert '  - "c"\n' in text
 
 
 class TestLoadProfile:

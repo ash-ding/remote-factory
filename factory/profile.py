@@ -47,7 +47,7 @@ def _read_auto_memory(project_paths: list[Path] | None = None) -> str:
         return ""
 
     allowed_prefixes: set[str] | None = None
-    if project_paths:
+    if project_paths is not None:
         allowed_prefixes = set()
         for pp in project_paths:
             encoded = "-" + str(pp.resolve()).replace("/", "-")
@@ -163,7 +163,7 @@ def save_profile(content: str, source_projects: list[str], runner_name: str) -> 
         f"source_projects:\n"
     )
     for p in source_projects:
-        frontmatter += f"  - {p}\n"
+        frontmatter += f'  - "{p}"\n'
     frontmatter += (
         f"signal_count: {signal_count}\n"
         f"runner: {runner_name}\n"
