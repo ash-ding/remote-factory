@@ -7,6 +7,9 @@ from unittest.mock import AsyncMock, patch
 
 from factory.profile import (
     _MAX_SECTION_CHARS,
+    _build_synthesis_task,
+    _read_ace_playbooks,
+    _read_auto_memory,
     _truncate,
     collect_evidence,
     inject_profile,
@@ -165,6 +168,103 @@ class TestInjectProfile:
     def test_section_header_format(self) -> None:
         result = inject_profile("prompt", "profile text")
         assert "## User Profile (auto-generated from session history)" in result
+
+
+class TestReadAutoMemory:
+    def test_returns_empty_when_no_dir(self, tmp_path: Path) -> None:
+        with patch("factory.profile.Path.home", return_value=tmp_path):
+            result = _read_auto_memory()
+        assert result == ""
+
+    def test_reads_memory_files(self, tmp_path: Path) -> None:
+        mem_dir = tmp_path / ".claude" / "projects" / "test-proj" / "memory"
+        mem_dir.mkdir(parents=True)
+        (mem_dir / "note.md").write_text("Remember this fact")
+        with patch("factory.profile.Path.home", return_value=tmp_path):
+            result = _read_auto_memory()
+        assert "note.md" in result
+        assert "Remember this fact" in result
+
+    def test_skips_dirs_without_memory_subdir(self, tmp_path: Path) -> None:
+        proj_dir = tmp_path / ".claude" / "projects" / "no-memory"
+        proj_dir.mkdir(parents=True)
+        (proj_dir / "other.txt").write_text("not a memory dir")
+        with patch("factory.profile.Path.home", return_value=tmp_path):
+            result = _read_auto_memory()
+        assert result == ""
+
+    def test_truncates_large_memory(self, tmp_path: Path) -> None:
+        mem_dir = tmp_path / ".claude" / "projects" / "big-proj" / "memory"
+        mem_dir.mkdir(parents=True)
+        (mem_dir / "huge.md").write_text("x" * (_MAX_SECTION_CHARS + 500))
+        with patch("factory.profile.Path.home", return_value=tmp_path):
+            result = _read_auto_memory()
+        assert result.endswith("... (truncated)")
+
+
+class TestReadAcePlaybooks:
+    def test_returns_empty_when_no_dir(self, tmp_path: Path) -> None:
+        with patch("factory.profile.Path.home", return_value=tmp_path):
+            result = _read_ace_playbooks()
+        assert result == ""
+
+    def test_reads_playbook_files(self, tmp_path: Path) -> None:
+        pb_dir = tmp_path / ".factory" / "playbooks"
+        pb_dir.mkdir(parents=True)
+        (pb_dir / "ceo.md").write_text("CEO playbook rules")
+        (pb_dir / "builder.md").write_text("Builder playbook rules")
+        with patch("factory.profile.Path.home", return_value=tmp_path):
+            result = _read_ace_playbooks()
+        assert "### ceo" in result
+        assert "CEO playbook rules" in result
+        assert "### builder" in result
+        assert "Builder playbook rules" in result
+
+    def test_ignores_non_md_files(self, tmp_path: Path) -> None:
+        pb_dir = tmp_path / ".factory" / "playbooks"
+        pb_dir.mkdir(parents=True)
+        (pb_dir / "notes.txt").write_text("not a playbook")
+        with patch("factory.profile.Path.home", return_value=tmp_path):
+            result = _read_ace_playbooks()
+        assert result == ""
+
+
+class TestBuildSynthesisTask:
+    def test_formats_non_empty_sections(self) -> None:
+        evidence = {
+            "experiment_history": "exp data here",
+            "ceo_verdicts": "verdict data",
+        }
+        result = _build_synthesis_task(evidence)
+        assert "## experiment_history" in result
+        assert "exp data here" in result
+        assert "## ceo_verdicts" in result
+        assert "verdict data" in result
+        assert "(no data)" not in result
+
+    def test_formats_empty_sections(self) -> None:
+        evidence = {
+            "experiment_history": "",
+            "auto_memory": "  ",
+        }
+        result = _build_synthesis_task(evidence)
+        assert "(no data)" in result
+
+    def test_mixed_empty_and_non_empty(self) -> None:
+        evidence = {
+            "experiment_history": "some data",
+            "ceo_verdicts": "",
+            "auto_memory": "memory content",
+        }
+        result = _build_synthesis_task(evidence)
+        assert "some data" in result
+        assert "memory content" in result
+        no_data_count = result.count("(no data)")
+        assert no_data_count == 1
+
+    def test_starts_with_synthesis_instruction(self) -> None:
+        result = _build_synthesis_task({"a": "b"})
+        assert result.startswith("Synthesize a user profile")
 
 
 class TestSynthesizeProfile:

@@ -1426,6 +1426,18 @@ class TestCmdProfile:
         result = main(["profile"])
         assert result == 1
 
+    def test_profile_build_dry_run(self, tmp_path, capsys):
+        proj = tmp_path / "myproj"
+        factory_dir = proj / ".factory"
+        factory_dir.mkdir(parents=True)
+        (factory_dir / "results.tsv").write_text("id\thyp\tverdict\n1\ttest-hyp\tkeep\n")
+        result = main(["profile", "build", "--dry-run", str(proj)])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "experiment_history" in out
+        assert "test-hyp" in out
+        assert "ceo_verdicts" in out
+
 
 class TestCmdHomeReturnsFactoryDir:
     def test_cmd_home_returns_package_root(self, capsys):
