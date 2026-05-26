@@ -8,11 +8,15 @@ import sys
 from typing import BinaryIO
 
 # Robust multi-branch matcher for ANSI/VT escape sequences. Deliberately
-# preserves \r and \n (they are not ANSI escapes). Covers four classes:
+# preserves \r and \n (they are not ANSI escapes). Covers five classes:
 #   - CSI: \x1b[ <params 0x30-0x3F> <intermediates 0x20-0x2F> <final 0x40-0x7E>
 #     (colors incl. colon-delimited truecolor, cursor moves, clear-screen,
 #     alt-screen toggles \x1b[?1049h/l, cursor-visibility \x1b[?25l/h)
 #   - OSC: \x1b] ... terminated by BEL (\x07) or ST (\x1b\\) — e.g. window title
+#   - String-introducer DCS/SOS/PM/APC: \x1bP, \x1bX, \x1b^, \x1b_ carry a payload
+#     terminated by BEL (\x07) or ST (\x1b\\). This branch MUST precede the Fe/C1
+#     branch so the whole payload is consumed — otherwise Fe greedily matches just
+#     the 2-byte introducer and the payload leaks as visible text.
 #   - Fe / 2-byte C1: \x1b followed by 0x40-0x5F (incl. ESC M reverse line feed)
 #   - Fp: \x1b7 (DECSC), \x1b8 (DECRC), \x1b= / \x1b> (keypad modes)
 # The 8-bit C1 ST (\x9C) is intentionally NOT matched: on a raw byte stream that
@@ -22,6 +26,7 @@ _ANSI_ESCAPE_RE = re.compile(
     rb"\x1B(?:"
     rb"\[[0-?]*[ -/]*[@-~]"              # CSI ... <final>
     rb"|\][^\x07\x1B]*(?:\x07|\x1B\\)"   # OSC ... (BEL or ST terminator)
+    rb"|[PX^_][^\x07\x1B]*(?:\x07|\x1B\\)"  # DCS/SOS/PM/APC ... (BEL or ST terminator)
     rb"|[@-Z\\-_]"                        # 2-byte C1 / Fe (incl. ESC M)
     rb"|[78=>]"                           # Fp: DECSC, DECRC, keypad =/>
     rb")"

@@ -992,6 +992,15 @@ class TestAnsiSanitization:
         # ST (ESC \\)-terminated
         assert strip_ansi(b"\x1b]0;title\x1b\\rest") == b"rest"
 
+    def test_strip_ansi_removes_string_sequences(self) -> None:
+        """DCS/SOS/PM/APC introducer + ST-terminated payload are fully removed."""
+        from factory.runners._stream import strip_ansi
+
+        assert strip_ansi(b"\x1bP1$r0m\x1b\\after") == b"after"  # DCS
+        assert strip_ansi(b"\x1b_payload\x1b\\after") == b"after"  # APC
+        assert strip_ansi(b"\x1b^foo\x1b\\after") == b"after"  # PM
+        assert strip_ansi(b"\x1bXsos\x1b\\after") == b"after"  # SOS
+
     def test_strip_ansi_removes_decsc_decrc_ri(self) -> None:
         """Fp save/restore cursor and Fe reverse-line-feed are removed."""
         from factory.runners._stream import strip_ansi
