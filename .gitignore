@@ -23,6 +23,7 @@ dist/
 
 # Generated plugin agents (scripts/sync_agents.py)
 /agents/
+/codex-agents/
 
 # Dev artifacts
 .playwright-mcp/
