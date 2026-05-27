@@ -1,3 +1,4 @@
+<!-- Keep in sync with CLAUDE.md -->
 # AGENTS.md
 
 This file provides guidance to Codex CLI and other AGENTS.md-compatible tools when working with this repository.
@@ -45,7 +46,7 @@ The factory is a three-layer system:
 2. **CEO Agent** (`factory/agents/prompts/ceo.md`): Orchestrates the full workflow. Spawned via `factory ceo /path`.
 3. **Specialist Agents** (`factory/agents/`): Eight subprocesses spawned by the CEO via `factory agent <role>`.
 
-Agent roles: Researcher, Strategist, Builder, Reviewer, Evaluator, Archivist, Distiller, Refiner, CEO.
+Agent roles: Researcher, Strategist, Builder, Reviewer, Evaluator, Archivist, Distiller, Failure Analyst, CEO.
 
 ## MCP Server
 

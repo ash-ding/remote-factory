@@ -15,6 +15,10 @@ from factory.agents.runner import _PROMPTS_DIR
 _AGENTS_YML = Path(__file__).parent / "agents.yml"
 _PLUGIN_AGENTS_DIR_CANDIDATE = Path(__file__).resolve().parent.parent.parent / "agents"
 _PLUGIN_AGENTS_DIR: Path | None = _PLUGIN_AGENTS_DIR_CANDIDATE if _PLUGIN_AGENTS_DIR_CANDIDATE.is_dir() else None
+_CODEX_PLUGIN_AGENTS_DIR_CANDIDATE = Path(__file__).resolve().parent.parent.parent / "codex-agents"
+_CODEX_PLUGIN_AGENTS_DIR: Path | None = (
+    _CODEX_PLUGIN_AGENTS_DIR_CANDIDATE if _CODEX_PLUGIN_AGENTS_DIR_CANDIDATE.is_dir() else None
+)
 
 
 @dataclass(frozen=True)
@@ -157,6 +161,8 @@ def check_codex_agents_in_sync(agents_dir: Path | None = None) -> list[str]:
 
     Returns a list of role names that are out of sync (empty = all good).
     """
+    if agents_dir is None:
+        agents_dir = _CODEX_PLUGIN_AGENTS_DIR
     if agents_dir is None:
         return []
 
