@@ -31,12 +31,27 @@ class OpenCodeAuthError(Exception):
         )
 
 
+def _can_source_key_from_shell() -> bool:
+    """Check if OPENAI_API_KEY can be sourced from ~/.zshrc."""
+    try:
+        result = subprocess.run(
+            ["zsh", "-c", "source ~/.zshrc 2>/dev/null && echo $OPENAI_API_KEY"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return bool(result.stdout.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
 def _check_auth() -> None:
-    """Check that OPENAI_API_KEY is set (once per process)."""
+    """Check that OPENAI_API_KEY is available (env or shell profile, once per process)."""
     global _auth_checked  # noqa: PLW0603
     if _auth_checked:
         return
     if os.environ.get("OPENAI_API_KEY"):
+        _auth_checked = True
+        return
+    if _can_source_key_from_shell():
         _auth_checked = True
         return
     raise OpenCodeAuthError()
@@ -67,6 +82,23 @@ def _prepend_opencode_path(env: dict[str, str]) -> None:
         if not current_path.startswith(bin_dir):
             env["PATH"] = f"{bin_dir}:{current_path}"
             log.debug("opencode_path_prepended", dir=bin_dir)
+
+
+def _source_openai_key_from_shell(env: dict[str, str]) -> None:
+    """If OPENAI_API_KEY is missing, try sourcing it from ~/.zshrc into env (not os.environ)."""
+    if env.get("OPENAI_API_KEY"):
+        return
+    try:
+        result = subprocess.run(
+            ["zsh", "-c", "source ~/.zshrc 2>/dev/null && echo $OPENAI_API_KEY"],
+            capture_output=True, text=True, timeout=5,
+        )
+        key = result.stdout.strip()
+        if key:
+            env["OPENAI_API_KEY"] = key
+            log.debug("openai_key_sourced_from_zshrc")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
 
 
 def is_opencode_dry_run() -> bool:
@@ -111,6 +143,7 @@ class OpenCodeRunner:
 
         env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
         _prepend_opencode_path(env)
+        _source_openai_key_from_shell(env)
 
         return cmd, env, []
 
@@ -144,6 +177,7 @@ class OpenCodeRunner:
 
         env = dict(os.environ)
         _prepend_opencode_path(env)
+        _source_openai_key_from_shell(env)
 
         result = subprocess.run(cmd, cwd=request.cwd, env=env)
         return result.returncode
