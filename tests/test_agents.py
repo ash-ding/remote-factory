@@ -181,11 +181,11 @@ class TestInvokeAgentModel:
             return proc
 
         with patch(
-            "factory.runners.claude.stream_subprocess", new_callable=AsyncMock
+            "factory.runners._subprocess.stream_subprocess", new_callable=AsyncMock
         ) as mock_stream:
             mock_stream.return_value = (b"ok", b"")
 
-            monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+            monkeypatch.setattr("factory.runners._subprocess.asyncio.create_subprocess_exec", mock_exec)
 
             await invoke_agent("researcher", "test task", tmp_path, model="claude-opus-4-6")
             assert "--model" in captured_cmd
@@ -208,11 +208,11 @@ class TestInvokeAgentModel:
             return proc
 
         with patch(
-            "factory.runners.claude.stream_subprocess", new_callable=AsyncMock
+            "factory.runners._subprocess.stream_subprocess", new_callable=AsyncMock
         ) as mock_stream:
             mock_stream.return_value = (b"ok", b"")
 
-            monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+            monkeypatch.setattr("factory.runners._subprocess.asyncio.create_subprocess_exec", mock_exec)
 
             await invoke_agent("researcher", "test task", tmp_path, model=None)
             assert "--model" not in captured_cmd
@@ -297,7 +297,8 @@ class TestConsecutiveFailureAbort:
         class MockRunner:
             name = "claude"
             async def headless(self, *args, **kwargs):
-                return ("success", 0, None)
+                from factory.models import AgentRunResult
+                return AgentRunResult(stdout="success", return_code=0)
 
         monkeypatch.setattr(runner_module, "get_runner", lambda *args, **kwargs: MockRunner())
 
@@ -320,7 +321,8 @@ class TestConsecutiveFailureAbort:
         class MockRunner:
             name = "claude"
             async def headless(self, *args, **kwargs):
-                return ("error output", 1, None)  # non-zero exit code
+                from factory.models import AgentRunResult
+                return AgentRunResult(stdout="error output", return_code=1)
 
         monkeypatch.setattr(runner_module, "get_runner", lambda *args, **kwargs: MockRunner())
 
@@ -343,7 +345,8 @@ class TestConsecutiveFailureAbort:
         class MockRunner:
             name = "claude"
             async def headless(self, *args, **kwargs):
-                return ("error", 1, None)
+                from factory.models import AgentRunResult
+                return AgentRunResult(stdout="error", return_code=1)
 
         monkeypatch.setattr(runner_module, "get_runner", lambda *args, **kwargs: MockRunner())
 
@@ -371,7 +374,8 @@ class TestConsecutiveFailureAbort:
         class MockRunner:
             name = "claude"
             async def headless(self, *args, **kwargs):
-                return ("error", 1, None)
+                from factory.models import AgentRunResult
+                return AgentRunResult(stdout="error", return_code=1)
 
         monkeypatch.setattr(runner_module, "get_runner", lambda *args, **kwargs: MockRunner())
 

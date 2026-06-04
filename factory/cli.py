@@ -331,12 +331,14 @@ def _classify_with_llm(
         old_quiet = os.environ.get("FACTORY_RUNNER_QUIET")
         os.environ["FACTORY_RUNNER_QUIET"] = "1"
         try:
-            result, code, _usage = _run(runner.headless(
-                prompt, task, Path.cwd(),
-                timeout=60.0,
-                dangerously_skip_permissions=True,
-                role="wizard",
-            ))
+            from factory.models import AgentRunRequest
+
+            wizard_request = AgentRunRequest(
+                prompt=prompt, task=task, cwd=Path.cwd(),
+                timeout=60.0, skip_permissions=True, role="wizard",
+            )
+            run_result = _run(runner.headless(wizard_request))
+            result, code = run_result.stdout, run_result.return_code
         finally:
             if old_quiet is None:
                 os.environ.pop("FACTORY_RUNNER_QUIET", None)
@@ -2205,6 +2207,47 @@ def cmd_agent(args: argparse.Namespace) -> int:
     return code
 
 
+def cmd_runners_list(args: argparse.Namespace) -> int:
+    """List all available runners with metadata."""
+    from factory.runners import get_all_runner_meta
+
+    meta_list = get_all_runner_meta()
+    use_json = getattr(args, "json", False)
+
+    if use_json:
+        import json as json_mod
+        data = []
+        for m in meta_list:
+            data.append({
+                "name": m.name,
+                "display_name": m.display_name,
+                "binary": m.binary,
+                "install_hint": m.install_hint,
+                "available": m.is_available(),
+                "auth_ok": m.check_auth(),
+                "supports_model_override": m.supports_model_override,
+                "supports_interactive": m.supports_interactive,
+                "supports_streaming": m.supports_streaming,
+                "supports_usage_telemetry": m.supports_usage_telemetry,
+                "supports_session_name": m.supports_session_name,
+            })
+        print(json_mod.dumps(data, indent=2))
+        return 0
+
+    if not meta_list:
+        print("No runners registered.")
+        return 0
+
+    header = f"{'Name':<12} {'Display':<20} {'Binary':<12} {'Available':>9} {'Auth':>6}"
+    print(header)
+    print("-" * len(header))
+    for m in meta_list:
+        avail = "yes" if m.is_available() else "no"
+        auth = "ok" if m.check_auth() else "missing"
+        print(f"{m.name:<12} {m.display_name:<20} {m.binary:<12} {avail:>9} {auth:>6}")
+    return 0
+
+
 def cmd_serve_mcp(args: argparse.Namespace) -> int:
     """Start the Factory MCP stdio server."""
     from factory.mcp_server import main as mcp_main
@@ -2316,12 +2359,14 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         )
 
         if not headless:
+            from factory.models import AgentRunRequest
+
             prompt = resolve_prompt("ceo", project_path)
             runner = get_runner(runner_name)
-            return runner.interactive_run(
-                prompt, task, project_path,
-                model=model, role="ceo", dangerously_skip_permissions=True,
-            )
+            return runner.interactive_run(AgentRunRequest(
+                prompt=prompt, task=task, cwd=project_path,
+                model=model, role="ceo", skip_permissions=True,
+            ))
 
         from factory.ceo_completion import run_ceo_with_completion_guard
         result, code = _run(run_ceo_with_completion_guard(
@@ -2571,13 +2616,15 @@ def cmd_ceo(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             mark_read(project_path, pending_ids)
+        from factory.models import AgentRunRequest as _RunReq
+
         prompt = resolve_prompt("ceo", wt_path, use_profile=use_profile)
         runner = get_runner(runner_name)
-        return runner.interactive_run(
-            prompt, task, wt_path,
-            model=model, role="ceo", dangerously_skip_permissions=True,
+        return runner.interactive_run(_RunReq(
+            prompt=prompt, task=task, cwd=wt_path,
+            model=model, role="ceo", skip_permissions=True,
             session_name=session_name,
-        )
+        ))
     finally:
         remove_worktree(project_path, wt_path, wt_branch)
         if needs_materialize and _is_scaffold_only(project_path):
@@ -3907,6 +3954,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", default=False,
                     help="Output as JSON instead of table")
 
+    # runners — runner management
+    runners_parser = sub.add_parser("runners", help="Manage factory runners")
+    runners_sub = runners_parser.add_subparsers(dest="runners_command")
+    p_runners_list = runners_sub.add_parser("list", help="List all registered runners")
+    p_runners_list.add_argument("--json", action="store_true", default=False,
+                                help="Output as JSON")
+
     # serve-mcp — MCP stdio server
     sub.add_parser("serve-mcp", help="Start the Factory MCP stdio server")
 
@@ -3936,7 +3990,7 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Project paths to collect evidence from (default: all registered)")
     p_build.add_argument("--dry-run", action="store_true", default=False,
                          help="Print collected evidence without running LLM synthesis")
-    p_build.add_argument("--runner", choices=["claude", "bob", "codex"], default=None,
+    p_build.add_argument("--runner", default=None,
                          help="CLI backend to use for synthesis")
     profile_sub.add_parser("show", help="Print the current user profile")
 
@@ -3959,7 +4013,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Timeout in seconds (default: 600)")
     p.add_argument("--model", default=None,
                     help="Claude model for agent subprocess (default: FACTORY_MODEL env var, or claude CLI default)")
-    p.add_argument("--runner", choices=["claude", "bob"], default=None,
+    p.add_argument("--runner", default=None,
                     help="CLI backend to use (default: FACTORY_RUNNER env var, or 'claude')")
     p.add_argument("--profile", default=None,
                     help="Credential profile from ~/.factory/config.toml")
@@ -4017,7 +4071,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Target branch for PRs (default: from factory.md, fallback: main)")
     p.add_argument("--model", default=None,
                     help="Claude model for agent subprocesses (default: FACTORY_MODEL env var, or claude CLI default)")
-    p.add_argument("--runner", choices=["claude", "bob"], default=None,
+    p.add_argument("--runner", default=None,
                     help="CLI backend to use (default: FACTORY_RUNNER env var, or 'claude')")
     p.add_argument("--profile", default=None,
                     help="Credential profile from ~/.factory/config.toml")
@@ -4089,7 +4143,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Target branch for PRs (default: from factory.md, fallback: main)")
     p.add_argument("--model", default=None,
                     help="Claude model for agent subprocesses (default: FACTORY_MODEL env var, or claude CLI default)")
-    p.add_argument("--runner", choices=["claude", "bob"], default=None,
+    p.add_argument("--runner", default=None,
                     help="CLI backend to use (default: FACTORY_RUNNER env var, or 'claude')")
     p.add_argument("--profile", default=None,
                     help="Credential profile from ~/.factory/config.toml")
@@ -4124,7 +4178,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--model", default=None,
                     help="Claude model for agent subprocesses (default: FACTORY_MODEL env var, or claude CLI default)")
-    p.add_argument("--runner", choices=["claude", "bob"], default=None,
+    p.add_argument("--runner", default=None,
                     help="CLI backend to use (default: FACTORY_RUNNER env var, or 'claude')")
 
     # tmux-ls — list factory tmux sessions
@@ -4201,6 +4255,7 @@ def main(argv: list[str] | None = None) -> int:
         "profile": cmd_profile,
         "emit": cmd_emit,
         "usage": cmd_usage,
+        "runners": cmd_runners_list,
         "agent": cmd_agent,
         "ceo": cmd_ceo,
         "run": cmd_run,

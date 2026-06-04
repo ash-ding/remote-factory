@@ -2,24 +2,25 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
 import os
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from factory.runners._stream import should_stream, stream_subprocess
+import structlog
+
+from factory.runners._subprocess import run_subprocess
 
 if TYPE_CHECKING:
-    from factory.models import AgentUsage
+    from factory.models import AgentRunRequest, AgentRunResult, AgentUsage
+    from factory.runners.protocol import RunnerMeta
 
-logger = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 
-def _parse_usage(data: dict) -> "AgentUsage":
+def _parse_usage(data: dict) -> AgentUsage:
     """Extract AgentUsage from Claude Code JSON output."""
     from factory.models import AgentUsage
 
@@ -41,155 +42,111 @@ class ClaudeRunner:
 
     name: str = "claude"
 
-    async def headless(
-        self,
-        prompt: str,
-        task: str,
-        cwd: Path,
-        *,
-        timeout: float = 600.0,
-        model: str | None = None,
-        dangerously_skip_permissions: bool = True,
-        role: str = "unknown",
-        session_name: str | None = None,
-        tmux_persist: bool = False,
-    ) -> tuple[str, int, "AgentUsage | None"]:
-        """Run a headless Claude Code invocation.
+    @classmethod
+    def metadata(cls) -> RunnerMeta:
+        from factory.runners.protocol import RunnerMeta
+        return RunnerMeta(
+            name="claude",
+            display_name="Claude Code",
+            binary="claude",
+            install_hint="npm install -g @anthropic-ai/claude-code",
+            supports_usage_telemetry=True,
+            supports_session_name=True,
+        )
 
-        Args:
-            prompt: The system prompt / agent role definition.
-            task: The task to execute.
-            cwd: Working directory for the subprocess.
-            timeout: Maximum execution time in seconds.
-            model: Optional model override.
-            dangerously_skip_permissions: If True, skip permission prompts.
-            role: Agent role (used for streaming prefix).
-            session_name: Optional session name for identification in /resume.
-            tmux_persist: If True, run the agent interactively in a tmux window.
+    async def headless(self, request: AgentRunRequest) -> AgentRunResult:
+        """Run a headless Claude Code invocation."""
+        from factory.models import AgentRunResult
 
-        Returns (stdout, return_code, usage).
-        """
+        tmux_persist = request.extras.get("tmux_persist", False)
         if tmux_persist:
             from factory.runners._tmux_persist import find_project_path, run_in_tmux, tmux_available
 
             if tmux_available():
-                return await run_in_tmux(
-                    prompt, task, cwd, role, find_project_path(cwd),
-                    model=model,
-                    dangerously_skip_permissions=dangerously_skip_permissions,
+                stdout, rc, usage = await run_in_tmux(
+                    request.prompt, request.task, request.cwd, request.role,
+                    find_project_path(request.cwd),
+                    model=request.model,
+                    dangerously_skip_permissions=request.skip_permissions,
                 )
-            logger.warning("tmux not available; falling back to headless")
+                return AgentRunResult(stdout=stdout, return_code=rc, usage=usage)
+            log.warning("tmux_not_available")
 
         prompt_file = tempfile.NamedTemporaryFile(
             mode="w", suffix=".md", prefix="factory-prompt-", delete=False,
         )
         try:
-            prompt_file.write(prompt)
+            prompt_file.write(request.prompt)
             prompt_file.close()
 
             cmd = [
                 "claude", "--append-system-prompt-file", prompt_file.name,
-                "-p", task,
+                "-p", request.task,
                 "--output-format", "json",
             ]
-            if dangerously_skip_permissions:
+            if request.skip_permissions:
                 cmd.append("--dangerously-skip-permissions")
-            if model:
-                cmd.extend(["--model", model])
-            if session_name:
-                cmd.extend(["--name", session_name])
+            if request.model:
+                cmd.extend(["--model", request.model])
+            if request.session_name:
+                cmd.extend(["--name", request.session_name])
 
-            logger.info("ClaudeRunner headless: cwd=%s, model=%s", cwd, model)
+            log.info("claude_headless", cwd=str(request.cwd), model=request.model)
 
             env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
-            if model:
-                env["FACTORY_MODEL"] = model
+            if request.model:
+                env["FACTORY_MODEL"] = request.model
 
-            stream = should_stream()
-            prefix = f"[claude:{role}]" if stream else None
-
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=cwd,
-                    env=env,
-                )
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    stream_subprocess(proc, stream=stream, prefix=prefix),
-                    timeout=timeout,
-                )
-            except asyncio.TimeoutError:
-                proc.kill()  # type: ignore[union-attr]
-                await proc.wait()  # type: ignore[union-attr]
-                logger.error("ClaudeRunner timed out after %ss", timeout)
-                return f"Agent timed out after {timeout}s", 1, None
-            except FileNotFoundError:
-                logger.error("'claude' CLI not found on PATH")
-                return "Error: 'claude' CLI not found on PATH", 1, None
-
-            raw_stdout = stdout_bytes.decode()
-            stderr = stderr_bytes.decode()
-            return_code = proc.returncode or 0
-
-            if return_code != 0:
-                logger.warning("ClaudeRunner exited with code %d: %s", return_code, stderr[:200])
+            result = await run_subprocess(
+                cmd, cwd=str(request.cwd), env=env,
+                timeout=request.timeout, runner_name="claude", role=request.role,
+            )
 
             usage = None
-            result_text = raw_stdout
+            result_text = result.stdout
             try:
-                data = json.loads(raw_stdout)
+                data = json.loads(result.stdout)
                 if isinstance(data, dict):
-                    result_value = data.get("result", raw_stdout)
-                    result_text = result_value if isinstance(result_value, str) else raw_stdout
+                    result_value = data.get("result", result.stdout)
+                    result_text = result_value if isinstance(result_value, str) else result.stdout
                     usage = _parse_usage(data)
             except (json.JSONDecodeError, ValueError):
-                logger.debug("Could not parse JSON output, returning raw stdout")
+                log.debug("claude_json_parse_failed")
 
-            return result_text, return_code, usage
+            return AgentRunResult(
+                stdout=result_text,
+                return_code=result.return_code,
+                usage=usage,
+                metadata=result.metadata,
+            )
         finally:
             Path(prompt_file.name).unlink(missing_ok=True)
 
-    def interactive_run(
-        self,
-        prompt: str,
-        task: str,
-        cwd: Path,
-        *,
-        model: str | None = None,
-        role: str = "ceo",
-        dangerously_skip_permissions: bool = False,
-        session_name: str | None = None,
-    ) -> int:
-        """Run an interactive Claude Code session as a subprocess.
-
-        Returns the exit code so the caller can clean up in a finally block.
-        """
-        _ = role
+    def interactive_run(self, request: AgentRunRequest) -> int:
+        """Run an interactive Claude Code session as a subprocess."""
         prompt_file = tempfile.NamedTemporaryFile(
             mode="w", suffix=".md", prefix="factory-prompt-", delete=False,
         )
         try:
-            prompt_file.write(prompt)
+            prompt_file.write(request.prompt)
             prompt_file.close()
 
             cmd = [
                 "claude",
                 "--append-system-prompt-file", prompt_file.name,
             ]
-            if dangerously_skip_permissions:
+            if request.skip_permissions:
                 cmd.append("--dangerously-skip-permissions")
-            cmd.append(task)
-            if model:
-                cmd.extend(["--model", model])
-                os.environ["FACTORY_MODEL"] = model
-            if session_name:
-                cmd.extend(["--name", session_name])
+            cmd.append(request.task)
+            if request.model:
+                cmd.extend(["--model", request.model])
+                os.environ["FACTORY_MODEL"] = request.model
+            if request.session_name:
+                cmd.extend(["--name", request.session_name])
 
-            logger.info("ClaudeRunner interactive_run: cwd=%s", cwd)
+            log.info("claude_interactive", cwd=str(request.cwd))
 
-            result = subprocess.run(cmd, cwd=cwd)
+            result = subprocess.run(cmd, cwd=request.cwd)
             return result.returncode
         finally:
             Path(prompt_file.name).unlink(missing_ok=True)

@@ -187,21 +187,23 @@ async def synthesize_profile(
     prompt = resolve_prompt("profiler")
     task = _build_synthesis_task(evidence)
 
+    from factory.models import AgentRunRequest
+
     runner = get_runner(runner_name)
-    result, code, _usage = await runner.headless(
+    run_result = await runner.headless(AgentRunRequest(
         prompt=prompt,
         task=task,
         cwd=Path.cwd(),
         timeout=120.0,
-        dangerously_skip_permissions=True,
+        skip_permissions=True,
         role="profiler",
-    )
+    ))
 
-    if code != 0:
-        log.warning("profile_synthesis_failed", code=code)
-        return f"Profile synthesis failed (exit code {code}):\n{result}"
+    if run_result.return_code != 0:
+        log.warning("profile_synthesis_failed", code=run_result.return_code)
+        return f"Profile synthesis failed (exit code {run_result.return_code}):\n{run_result.stdout}"
 
-    return result
+    return run_result.stdout
 
 
 def load_profile(path: Path | None = None) -> str | None:

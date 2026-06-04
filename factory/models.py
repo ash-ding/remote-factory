@@ -562,3 +562,33 @@ class RefinementState(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     entries: list[RefinementEntry] = []
+
+
+# ── runner v2 ────────────────────────────────────────────────────
+
+
+class AgentRunRequest(BaseModel):
+    """Structured input for a runner invocation."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    prompt: str
+    task: str
+    cwd: Path
+    timeout: float = 600.0
+    model: str | None = None
+    skip_permissions: bool = True
+    role: str = "unknown"
+    session_name: str | None = None
+    extras: dict[str, object] = {}
+
+
+class AgentRunResult(BaseModel):
+    """Structured output from a runner invocation."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    stdout: str
+    return_code: int
+    usage: AgentUsage | None = None
+    metadata: dict[str, object] = {}
