@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -36,6 +37,7 @@ def _e2e_env_reset() -> None:
     saved = {k: os.environ.pop(k, None) for k in _DRY_RUN_VARS}
     reset_failure_counter()
     yield  # type: ignore[misc]
+    time.sleep(1)
     for k, v in saved.items():
         if v is not None:
             os.environ[k] = v

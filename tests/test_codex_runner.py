@@ -90,8 +90,9 @@ class TestCodexAuth:
         monkeypatch.delenv("CODEX_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-        with pytest.raises(CodexAuthError, match="CODEX_API_KEY"):
-            _check_auth()
+        with patch("factory.runners.codex._has_codex_oauth", return_value=False):
+            with pytest.raises(CodexAuthError, match="CODEX_API_KEY"):
+                _check_auth()
 
     def test_auth_passes_with_codex_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CODEX_API_KEY", "test-key")
@@ -115,15 +116,16 @@ class TestCodexAuth:
         monkeypatch.delenv("FACTORY_CODEX_DRY_RUN", raising=False)
 
         runner = CodexRunner()
-        with pytest.raises(CodexAuthError):
-            await runner.headless(
-                AgentRunRequest(
-                    prompt="Test",
-                    task="Test",
-                    cwd=tmp_path,
-                    role="researcher",
+        with patch("factory.runners.codex._has_codex_oauth", return_value=False):
+            with pytest.raises(CodexAuthError):
+                await runner.headless(
+                    AgentRunRequest(
+                        prompt="Test",
+                        task="Test",
+                        cwd=tmp_path,
+                        role="researcher",
+                    )
                 )
-            )
 
 
 class TestCodexEnvMapping:
@@ -154,7 +156,8 @@ class TestCodexEnvMapping:
         from factory.runners.codex import _make_codex_env
 
         env, tmpdir = _make_codex_env()
-        tmpdir.cleanup()
+        if tmpdir is not None:
+            tmpdir.cleanup()
         assert "VIRTUAL_ENV" not in env
 
 
@@ -196,6 +199,8 @@ class TestCodexHeadless:
             assert "--ask-for-approval" not in cmd
             assert "--model" in cmd
             assert "gpt-5.4" in cmd
+            assert "--skip-git-repo-check" in cmd
+            assert "--" in cmd
 
     async def test_combines_prompt_and_task(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -219,7 +224,8 @@ class TestCodexHeadless:
             )
 
             cmd = mock_run.call_args[0][0]
-            full_prompt = cmd[2]
+            dash_idx = cmd.index("--")
+            full_prompt = cmd[dash_idx + 1]
             assert "You are the CEO." in full_prompt
             assert "Run the experiment" in full_prompt
             assert "## Current Task" in full_prompt

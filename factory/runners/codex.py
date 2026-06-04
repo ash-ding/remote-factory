@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import tempfile
@@ -142,11 +143,22 @@ class CodexRunner:
 
         log.info("codex_headless", cwd=str(request.cwd), model=request.model, role=request.role)
 
+        retried = False
         try:
-            return await run_subprocess(
+            result = await run_subprocess(
                 cmd, cwd=str(request.cwd), env=env,
                 timeout=request.timeout, runner_name="codex", role=request.role,
             )
+            stderr = str(result.metadata.get("stderr", ""))
+            if "401 Unauthorized" in stderr and not retried:
+                retried = True
+                log.warning("codex_auth_retry", reason="401 Unauthorized in stderr")
+                await asyncio.sleep(2)
+                result = await run_subprocess(
+                    cmd, cwd=str(request.cwd), env=env,
+                    timeout=request.timeout, runner_name="codex", role=request.role,
+                )
+            return result
         finally:
             if hasattr(self, "_tmpdir") and self._tmpdir is not None:
                 self._tmpdir.cleanup()
