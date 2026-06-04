@@ -174,18 +174,26 @@ async def invoke_agent(
 
     agent_session_name = session_name or f"factory: {project_path.resolve().name}/{role}"
 
+    from factory.models import AgentRunRequest
+
+    request = AgentRunRequest(
+        prompt=prompt,
+        task=task,
+        cwd=project_path,
+        timeout=timeout,
+        model=model,
+        skip_permissions=dangerously_skip_permissions,
+        role=role,
+        session_name=agent_session_name,
+        project_path=project_path,
+        extras={"tmux_persist": tmux_persist},
+    )
+
     try:
-        stdout, return_code, usage = await runner.headless(
-            prompt=prompt,
-            task=task,
-            cwd=project_path,
-            timeout=timeout,
-            model=model,
-            dangerously_skip_permissions=dangerously_skip_permissions,
-            role=role,
-            session_name=agent_session_name,
-            tmux_persist=tmux_persist,
-        )
+        result = await runner.headless(request)
+        stdout = result.stdout
+        return_code = result.return_code
+        usage = result.usage
     except Exception as e:
         logger.error("%s agent failed: %s", role, e)
         _emit_safe(project_path, "agent.failed", agent=role, data={"error": str(e)[:200]})

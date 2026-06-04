@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from factory.models import AgentRunRequest, AgentRunResult
 from factory.runners import ClaudeRunner, BobRunner, get_runner, is_dry_run
+from factory.runners.opencode import OpenCodeRunner
 from factory.runners.usage import (
     CeilingExceededError,
     CeilingWarning,
@@ -51,63 +53,64 @@ class TestClaudeRunner:
         runner = ClaudeRunner()
 
         with patch(
-            "factory.runners.claude.stream_subprocess", new_callable=AsyncMock
+            "factory.runners._subprocess.stream_subprocess", new_callable=AsyncMock
         ) as mock_stream:
             mock_stream.return_value = (b'{"result":"output","usage":{},"cost_usd":0,"duration_ms":0,"num_turns":1,"model":"claude-opus-4-7"}', b"")
 
             with patch(
-                "asyncio.create_subprocess_exec", new_callable=AsyncMock
+                "factory.runners._subprocess.asyncio.create_subprocess_exec", new_callable=AsyncMock
             ) as mock_exec:
                 mock_proc = AsyncMock()
                 mock_proc.returncode = 0
                 mock_exec.return_value = mock_proc
 
-                stdout, code, usage = await runner.headless(
+                result = await runner.headless(AgentRunRequest(
                     prompt="You are a test agent.",
                     task="Say hello",
                     cwd=tmp_path,
                     timeout=60.0,
                     model="claude-opus-4-7",
-                )
+                ))
 
-                assert code == 0
-                assert stdout == "output"
-                assert usage is not None
+                assert result.return_code == 0
+                assert result.stdout == "output"
+                assert result.usage is not None
 
                 call_args = mock_exec.call_args
-                cmd = call_args[0]
-                assert cmd[0] == "claude"
-                assert "--append-system-prompt-file" in cmd
-                assert "-p" in cmd
-                assert "--dangerously-skip-permissions" in cmd
-                assert "--model" in cmd
-                assert "claude-opus-4-7" in cmd
-                assert "--output-format" in cmd
-                assert "json" in cmd
+                # The args are passed as *cmd, so all elements are positional
+                all_args = list(call_args[0])
+                assert all_args[0] == "claude"
+                assert "--append-system-prompt-file" in all_args
+                assert "-p" in all_args
+                assert "--dangerously-skip-permissions" in all_args
+                assert "--model" in all_args
+                assert "claude-opus-4-7" in all_args
+                assert "--output-format" in all_args
+                assert "json" in all_args
 
     async def test_headless_separates_prompt_and_task(self, tmp_path: Path) -> None:
         """headless() writes prompt to a temp file via --append-system-prompt-file and task via -p."""
         runner = ClaudeRunner()
 
         with patch(
-            "factory.runners.claude.stream_subprocess", new_callable=AsyncMock
+            "factory.runners._subprocess.stream_subprocess", new_callable=AsyncMock
         ) as mock_stream:
             mock_stream.return_value = (b'{"result":"ok"}', b"")
 
             with patch(
-                "asyncio.create_subprocess_exec", new_callable=AsyncMock
+                "factory.runners._subprocess.asyncio.create_subprocess_exec", new_callable=AsyncMock
             ) as mock_exec:
                 mock_proc = AsyncMock()
                 mock_proc.returncode = 0
                 mock_exec.return_value = mock_proc
 
-                await runner.headless(
+                await runner.headless(AgentRunRequest(
                     prompt="You are the CEO.",
                     task="Run the experiment",
                     cwd=tmp_path,
-                )
+                ))
 
-                cmd = mock_exec.call_args[0]
+                cmd = list(mock_exec.call_args[0])
                 assert "--append-system-prompt-file" in cmd
                 p_idx = cmd.index("-p")
                 assert cmd[p_idx + 1] == "Run the experiment"
@@ -118,11 +121,11 @@ class TestClaudeRunner:
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = type("Result", (), {"returncode": 0})()
-            runner.interactive_run(
+            runner.interactive_run(AgentRunRequest(
                 prompt="You are the CEO.",
                 task="Start session",
                 cwd=tmp_path,
-            )
+            ))
 
             cmd = mock_run.call_args[0][0]
             assert "--append-system-prompt-file" in cmd
@@ -147,12 +150,12 @@ class TestBobRunner:
 
         runner = BobRunner()
 
-        code = runner.interactive_run(
+        code = runner.interactive_run(AgentRunRequest(
             prompt="Test prompt",
             task="Test task",
             cwd=tmp_path,
             role="ceo",
-        )
+        ))
 
         assert code == 0
         captured = capsys.readouterr()
@@ -162,9 +165,6 @@ class TestBobRunner:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """BobRunner.headless() handles timeout gracefully."""
-        import asyncio
-        from unittest.mock import AsyncMock, patch
-
         monkeypatch.setenv("BOBSHELL_API_KEY", "test-key")
         monkeypatch.delenv("FACTORY_BOB_DRY_RUN", raising=False)
 
@@ -173,25 +173,27 @@ class TestBobRunner:
 
         (tmp_path / ".factory").mkdir()
 
-        with patch("factory.runners.bob.asyncio.wait_for", side_effect=asyncio.TimeoutError):
-            with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
-                mock_proc = AsyncMock()
-                mock_proc.kill = AsyncMock()
-                mock_proc.wait = AsyncMock()
-                mock_exec.return_value = mock_proc
+        # Mock run_subprocess to return a timeout result
+        with patch(
+            "factory.runners.bob.run_subprocess", new_callable=AsyncMock
+        ) as mock_run:
+            mock_run.return_value = AgentRunResult(
+                stdout="Agent timed out after 0.1s",
+                return_code=1,
+            )
 
-                runner = BobRunner()
-                stdout, code, usage = await runner.headless(
-                    prompt="Test",
-                    task="Test",
-                    cwd=tmp_path,
-                    role="researcher",
-                    timeout=0.1,
-                )
+            runner = BobRunner()
+            result = await runner.headless(AgentRunRequest(
+                prompt="Test",
+                task="Test",
+                cwd=tmp_path,
+                role="researcher",
+                timeout=0.1,
+            ))
 
-        assert code == 1
-        assert "timed out" in stdout.lower()
-        assert usage is None
+        assert result.return_code == 1
+        assert "timed out" in result.stdout.lower()
+        assert result.usage is None
         bob_module._auth_checked = False
 
     def test_count_cycle_invocations_with_datetime(self, tmp_path: Path) -> None:
@@ -245,16 +247,16 @@ class TestBobRunner:
         # Log entry AFTER cycle_start so it counts
         log_usage(tmp_path, "a", tmp_path, 1.0, 0, dry_run=False)
 
-        stdout, code, usage = await runner.headless(
+        result = await runner.headless(AgentRunRequest(
             prompt="Test",
             task="Test",
             cwd=tmp_path,
             role="researcher",
-        )
+        ))
 
-        assert code == 1
-        assert "ceiling" in stdout.lower() or "exceeded" in stdout.lower()
-        assert usage is None
+        assert result.return_code == 1
+        assert "ceiling" in result.stdout.lower() or "exceeded" in result.stdout.lower()
+        assert result.usage is None
         bob_module._auth_checked = False
 
     async def test_dry_run_returns_stub(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -264,17 +266,17 @@ class TestBobRunner:
         (tmp_path / ".factory").mkdir()
 
         runner = BobRunner()
-        stdout, code, usage = await runner.headless(
+        result = await runner.headless(AgentRunRequest(
             prompt="You are a test agent.",
             task="Say hello",
             cwd=tmp_path,
             role="researcher",
-        )
+        ))
 
-        assert code == 0
-        assert "[DRY-RUN]" in stdout
-        assert "researcher" in stdout
-        assert usage is None
+        assert result.return_code == 0
+        assert "[DRY-RUN]" in result.stdout
+        assert "researcher" in result.stdout
+        assert result.usage is None
 
     async def test_dry_run_logs_usage(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("FACTORY_BOB_DRY_RUN", "1")
@@ -283,12 +285,12 @@ class TestBobRunner:
         (tmp_path / ".factory").mkdir()
 
         runner = BobRunner()
-        _stdout, _code, _usage = await runner.headless(
+        await runner.headless(AgentRunRequest(
             prompt="Test prompt",
             task="Test task",
             cwd=tmp_path,
             role="builder",
-        )
+        ))
 
         log_path = get_usage_log_path(tmp_path)
         assert log_path.exists()
@@ -463,12 +465,12 @@ class TestBobAuthPreflight:
         from factory.runners.bob import BobAuthError
 
         with pytest.raises(BobAuthError):
-            await runner.headless(
+            await runner.headless(AgentRunRequest(
                 prompt="Test",
                 task="Test",
                 cwd=tmp_path,
                 role="researcher",
-            )
+            ))
 
     async def test_auth_check_passes_with_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -482,29 +484,25 @@ class TestBobAuthPreflight:
 
         (tmp_path / ".factory").mkdir()
 
-        # Mock the streaming subprocess to avoid actual bob invocation
+        # Mock run_subprocess to avoid actual bob invocation
         with patch(
-            "factory.runners.bob.stream_subprocess", new_callable=AsyncMock
-        ) as mock_stream:
-            mock_stream.return_value = (b"output", b"")
+            "factory.runners.bob.run_subprocess", new_callable=AsyncMock
+        ) as mock_run:
+            mock_run.return_value = AgentRunResult(
+                stdout="output",
+                return_code=0,
+            )
 
-            with patch(
-                "asyncio.create_subprocess_exec", new_callable=AsyncMock
-            ) as mock_exec:
-                mock_proc = AsyncMock()
-                mock_proc.returncode = 0
-                mock_exec.return_value = mock_proc
+            runner = BobRunner()
+            result = await runner.headless(AgentRunRequest(
+                prompt="Test",
+                task="Test",
+                cwd=tmp_path,
+                role="researcher",
+            ))
 
-                runner = BobRunner()
-                stdout, code, usage = await runner.headless(
-                    prompt="Test",
-                    task="Test",
-                    cwd=tmp_path,
-                    role="researcher",
-                )
-
-                assert code == 0
-                assert usage is None
+            assert result.return_code == 0
+            assert result.usage is None
 
 
 class TestKeyPersistence:
@@ -634,30 +632,30 @@ class TestKeyPersistence:
         monkeypatch.chdir(tmp_path)
 
         with patch(
-            "factory.runners.bob.stream_subprocess", new_callable=AsyncMock
+            "factory.runners._subprocess.stream_subprocess", new_callable=AsyncMock
         ) as mock_stream:
             mock_stream.return_value = (b"output", b"")
 
             with patch(
-                "asyncio.create_subprocess_exec", new_callable=AsyncMock
+                "factory.runners._subprocess.asyncio.create_subprocess_exec", new_callable=AsyncMock
             ) as mock_exec:
                 mock_proc = AsyncMock()
                 mock_proc.returncode = 0
                 mock_exec.return_value = mock_proc
 
                 runner = BobRunner()
-                stdout, code, usage = await runner.headless(
+                result = await runner.headless(AgentRunRequest(
                     prompt="Test",
                     task="Test",
                     cwd=tmp_path,
                     role="researcher",
-                )
+                ))
 
                 # Verify the subprocess was called with env containing the key
                 call_kwargs = mock_exec.call_args.kwargs
                 assert "env" in call_kwargs
                 assert call_kwargs["env"].get("BOBSHELL_API_KEY") == "subprocess-test-key"
-                assert usage is None
+                assert result.usage is None
 
         monkeypatch.delenv("BOBSHELL_API_KEY", raising=False)
         bob_module._auth_checked = False
@@ -820,26 +818,26 @@ class TestStreamingOutput:
 
         runner = ClaudeRunner()
 
-        # Mock should_stream to return True
-        with patch("factory.runners.claude.should_stream", return_value=True):
+        # Mock at _subprocess module level since run_subprocess calls should_stream + stream_subprocess
+        with patch("factory.runners._subprocess.should_stream", return_value=True):
             with patch(
-                "factory.runners.claude.stream_subprocess", new_callable=AsyncMock
+                "factory.runners._subprocess.stream_subprocess", new_callable=AsyncMock
             ) as mock_stream:
                 mock_stream.return_value = (b'{"result":"output"}', b"")
 
                 with patch(
-                    "asyncio.create_subprocess_exec", new_callable=AsyncMock
+                    "factory.runners._subprocess.asyncio.create_subprocess_exec", new_callable=AsyncMock
                 ) as mock_exec:
                     mock_proc = AsyncMock()
                     mock_proc.returncode = 0
                     mock_exec.return_value = mock_proc
 
-                    stdout, code, usage = await runner.headless(
+                    await runner.headless(AgentRunRequest(
                         prompt="Test",
                         task="Test",
                         cwd=tmp_path,
                         role="researcher",
-                    )
+                    ))
 
                     # Verify stream_subprocess was called with streaming enabled
                     mock_stream.assert_called_once()
@@ -865,32 +863,32 @@ class TestStreamingOutput:
         import factory.runners.bob as bob_module
         bob_module._auth_checked = False
 
-        with patch("factory.runners.bob.should_stream", return_value=True):
+        with patch("factory.runners._subprocess.should_stream", return_value=True):
             with patch(
-                "factory.runners.bob.stream_subprocess", new_callable=AsyncMock
+                "factory.runners._subprocess.stream_subprocess", new_callable=AsyncMock
             ) as mock_stream:
                 mock_stream.return_value = (b"output\n", b"")
 
                 with patch(
-                    "asyncio.create_subprocess_exec", new_callable=AsyncMock
+                    "factory.runners._subprocess.asyncio.create_subprocess_exec", new_callable=AsyncMock
                 ) as mock_exec:
                     mock_proc = AsyncMock()
                     mock_proc.returncode = 0
                     mock_exec.return_value = mock_proc
 
-                    stdout, code, usage = await runner.headless(
+                    result = await runner.headless(AgentRunRequest(
                         prompt="Test",
                         task="Test",
                         cwd=tmp_path,
                         role="builder",
-                    )
+                    ))
 
                     # Verify stream_subprocess was called with streaming enabled
                     mock_stream.assert_called_once()
                     call_kwargs = mock_stream.call_args.kwargs
                     assert call_kwargs["stream"] is True
                     assert call_kwargs["prefix"] == "[bob:builder]"
-                    assert usage is None
+                    assert result.usage is None
 
         bob_module._auth_checked = False
 
@@ -903,23 +901,23 @@ class TestStreamingOutput:
         runner = ClaudeRunner()
 
         with patch(
-            "factory.runners.claude.stream_subprocess", new_callable=AsyncMock
+            "factory.runners._subprocess.stream_subprocess", new_callable=AsyncMock
         ) as mock_stream:
             mock_stream.return_value = (b'{"result":"output"}', b"")
 
             with patch(
-                "asyncio.create_subprocess_exec", new_callable=AsyncMock
+                "factory.runners._subprocess.asyncio.create_subprocess_exec", new_callable=AsyncMock
             ) as mock_exec:
                 mock_proc = AsyncMock()
                 mock_proc.returncode = 0
                 mock_exec.return_value = mock_proc
 
-                await runner.headless(
+                await runner.headless(AgentRunRequest(
                     prompt="Test",
                     task="Test",
                     cwd=tmp_path,
                     role="researcher",
-                )
+                ))
 
                 # Verify stream_subprocess was called with streaming disabled
                 mock_stream.assert_called_once()
@@ -940,12 +938,12 @@ class TestStreamingOutput:
         json_output = json.dumps({"result": "Line 1\nLine 2\nLine 3\n", "usage": {}, "cost_usd": 0.01})
 
         with patch(
-            "factory.runners.claude.stream_subprocess", new_callable=AsyncMock
+            "factory.runners._subprocess.stream_subprocess", new_callable=AsyncMock
         ) as mock_stream:
             mock_stream.return_value = (json_output.encode(), b"")
 
             with patch(
-                "asyncio.create_subprocess_exec", new_callable=AsyncMock
+                "factory.runners._subprocess.asyncio.create_subprocess_exec", new_callable=AsyncMock
             ) as mock_exec:
                 mock_proc = AsyncMock()
                 mock_proc.returncode = 0
@@ -1176,7 +1174,7 @@ class TestAnsiSanitization:
     async def test_bob_runner_passes_sanitize_true(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """BobRunner.headless() passes sanitize=True to stream_subprocess."""
+        """BobRunner.headless() passes sanitize=True to run_subprocess."""
         monkeypatch.delenv("FACTORY_BOB_DRY_RUN", raising=False)
         monkeypatch.delenv("FACTORY_RUNNER_QUIET", raising=False)
         monkeypatch.setenv("BOBSHELL_API_KEY", "test-key")
@@ -1189,28 +1187,23 @@ class TestAnsiSanitization:
 
         runner = BobRunner()
 
-        with patch("factory.runners.bob.should_stream", return_value=True):
-            with patch(
-                "factory.runners.bob.stream_subprocess", new_callable=AsyncMock
-            ) as mock_stream:
-                mock_stream.return_value = (b"output\n", b"")
+        with patch(
+            "factory.runners.bob.run_subprocess", new_callable=AsyncMock
+        ) as mock_run:
+            mock_run.return_value = AgentRunResult(
+                stdout="output\n",
+                return_code=0,
+            )
 
-                with patch(
-                    "asyncio.create_subprocess_exec", new_callable=AsyncMock
-                ) as mock_exec:
-                    mock_proc = AsyncMock()
-                    mock_proc.returncode = 0
-                    mock_exec.return_value = mock_proc
+            await runner.headless(AgentRunRequest(
+                prompt="Test",
+                task="Test",
+                cwd=tmp_path,
+                role="builder",
+            ))
 
-                    await runner.headless(
-                        prompt="Test",
-                        task="Test",
-                        cwd=tmp_path,
-                        role="builder",
-                    )
-
-                    mock_stream.assert_called_once()
-                    assert mock_stream.call_args.kwargs["sanitize"] is True
+            mock_run.assert_called_once()
+            assert mock_run.call_args.kwargs["sanitize"] is True
 
         bob_module._auth_checked = False
 
@@ -1224,28 +1217,23 @@ class TestAnsiSanitization:
 
         runner = ClaudeRunner()
 
-        with patch("factory.runners.claude.should_stream", return_value=True):
-            with patch(
-                "factory.runners.claude.stream_subprocess", new_callable=AsyncMock
-            ) as mock_stream:
-                mock_stream.return_value = (b'{"result":"output"}', b"")
+        with patch(
+            "factory.runners.claude.run_subprocess", new_callable=AsyncMock
+        ) as mock_run:
+            mock_run.return_value = AgentRunResult(
+                stdout='{"result":"output"}',
+                return_code=0,
+            )
 
-                with patch(
-                    "asyncio.create_subprocess_exec", new_callable=AsyncMock
-                ) as mock_exec:
-                    mock_proc = AsyncMock()
-                    mock_proc.returncode = 0
-                    mock_exec.return_value = mock_proc
+            await runner.headless(AgentRunRequest(
+                prompt="Test",
+                task="Test",
+                cwd=tmp_path,
+                role="researcher",
+            ))
 
-                    await runner.headless(
-                        prompt="Test",
-                        task="Test",
-                        cwd=tmp_path,
-                        role="researcher",
-                    )
-
-                    mock_stream.assert_called_once()
-                    assert mock_stream.call_args.kwargs.get("sanitize", False) is False
+            mock_run.assert_called_once()
+            assert mock_run.call_args.kwargs.get("sanitize", False) is False
 
 
 class TestCeilingAccumulationAcrossInvocations:
@@ -1290,46 +1278,42 @@ class TestCeilingAccumulationAcrossInvocations:
         prompts_dir.mkdir()
         (prompts_dir / "researcher.md").write_text("You are a researcher.")
 
-        # Mock subprocess to avoid actually calling bob
+        # Mock run_subprocess to avoid actually calling bob
         with patch(
-            "factory.runners.bob.stream_subprocess", new_callable=AsyncMock
-        ) as mock_stream:
-            mock_stream.return_value = (b"output", b"")
+            "factory.runners.bob.run_subprocess", new_callable=AsyncMock
+        ) as mock_run:
+            mock_run.return_value = AgentRunResult(
+                stdout="output",
+                return_code=0,
+            )
 
-            with patch(
-                "asyncio.create_subprocess_exec", new_callable=AsyncMock
-            ) as mock_exec:
-                mock_proc = AsyncMock()
-                mock_proc.returncode = 0
-                mock_exec.return_value = mock_proc
+            # First invocation — should succeed (1/2)
+            stdout1, code1 = await invoke_agent(
+                "researcher",
+                "First task",
+                tmp_path,
+                runner_name="bob",
+            )
+            assert code1 == 0, f"First invocation failed: {stdout1}"
 
-                # First invocation — should succeed (1/2)
-                stdout1, code1 = await invoke_agent(
-                    "researcher",
-                    "First task",
-                    tmp_path,
-                    runner_name="bob",
-                )
-                assert code1 == 0, f"First invocation failed: {stdout1}"
+            # Second invocation — should succeed (2/2)
+            stdout2, code2 = await invoke_agent(
+                "researcher",
+                "Second task",
+                tmp_path,
+                runner_name="bob",
+            )
+            assert code2 == 0, f"Second invocation failed: {stdout2}"
 
-                # Second invocation — should succeed (2/2)
-                stdout2, code2 = await invoke_agent(
-                    "researcher",
-                    "Second task",
-                    tmp_path,
-                    runner_name="bob",
-                )
-                assert code2 == 0, f"Second invocation failed: {stdout2}"
-
-                # Third invocation — should fail (3/2 = ceiling exceeded)
-                stdout3, code3 = await invoke_agent(
-                    "researcher",
-                    "Third task",
-                    tmp_path,
-                    runner_name="bob",
-                )
-                assert code3 == 1, "Third invocation should have hit the ceiling"
-                assert "ceiling" in stdout3.lower() or "exceeded" in stdout3.lower()
+            # Third invocation — should fail (3/2 = ceiling exceeded)
+            stdout3, code3 = await invoke_agent(
+                "researcher",
+                "Third task",
+                tmp_path,
+                runner_name="bob",
+            )
+            assert code3 == 1, "Third invocation should have hit the ceiling"
+            assert "ceiling" in stdout3.lower() or "exceeded" in stdout3.lower()
 
         bob_module._auth_checked = False
 
@@ -1381,3 +1365,103 @@ class TestCeilingAccumulationAcrossInvocations:
 
         # Runner's cycle_start should be between now_before and now_after
         assert now_before <= runner.cycle_start <= now_after
+
+
+class TestOpenCodeInteractive:
+    """Tests for OpenCodeRunner.interactive_run() — prompt delivery."""
+
+    def test_interactive_run_passes_prompt(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """interactive_run() passes -p with the prompt to OpenCode."""
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.delenv("FACTORY_OPENCODE_DRY_RUN", raising=False)
+        runner = OpenCodeRunner()
+
+        with patch("factory.runners.opencode.subprocess.run") as mock_run:
+            mock_run.return_value = type("Result", (), {"returncode": 0})()
+            code = runner.interactive_run(AgentRunRequest(
+                prompt="You are the CEO.",
+                task="Start session",
+                cwd=tmp_path,
+            ))
+
+            assert code == 0
+            cmd = mock_run.call_args[0][0]
+            assert cmd[0] == "opencode"
+            assert "-p" in cmd
+            p_idx = cmd.index("-p")
+            full_prompt = cmd[p_idx + 1]
+            assert "You are the CEO." in full_prompt
+            assert "Start session" in full_prompt
+            assert "## Current Task" in full_prompt
+
+    def test_interactive_run_passes_cwd(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """interactive_run() passes -c with the cwd."""
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.delenv("FACTORY_OPENCODE_DRY_RUN", raising=False)
+        runner = OpenCodeRunner()
+
+        with patch("factory.runners.opencode.subprocess.run") as mock_run:
+            mock_run.return_value = type("Result", (), {"returncode": 0})()
+            runner.interactive_run(AgentRunRequest(
+                prompt="Test",
+                task="Test",
+                cwd=tmp_path,
+            ))
+
+            cmd = mock_run.call_args[0][0]
+            assert "-c" in cmd
+            c_idx = cmd.index("-c")
+            assert cmd[c_idx + 1] == str(tmp_path)
+
+    def test_interactive_run_dry_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """interactive_run() prints dry-run message and returns 0."""
+        monkeypatch.setenv("FACTORY_OPENCODE_DRY_RUN", "1")
+        runner = OpenCodeRunner()
+
+        code = runner.interactive_run(AgentRunRequest(
+            prompt="Test prompt",
+            task="Test task",
+            cwd=tmp_path,
+        ))
+
+        assert code == 0
+        captured = capsys.readouterr()
+        assert "[DRY-RUN]" in captured.out
+
+
+class TestBobInteractivePrompt:
+    """Tests for BobRunner.interactive_run() — prompt delivery."""
+
+    def test_interactive_run_passes_prompt_via_i_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """interactive_run() passes the prompt via -i flag."""
+        monkeypatch.setenv("BOBSHELL_API_KEY", "test-key")
+        monkeypatch.delenv("FACTORY_BOB_DRY_RUN", raising=False)
+
+        import factory.runners.bob as bob_module
+        bob_module._auth_checked = False
+
+        (tmp_path / ".factory").mkdir()
+        runner = BobRunner()
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = type("Result", (), {"returncode": 0})()
+            code = runner.interactive_run(AgentRunRequest(
+                prompt="You are the CEO.",
+                task="Start session",
+                cwd=tmp_path,
+            ))
+
+            assert code == 0
+            cmd = mock_run.call_args[0][0]
+            assert cmd[0] == "bob"
+            assert "-i" in cmd
+            i_idx = cmd.index("-i")
+            full_prompt = cmd[i_idx + 1]
+            assert "You are the CEO." in full_prompt
+            assert "Start session" in full_prompt
+
+        bob_module._auth_checked = False

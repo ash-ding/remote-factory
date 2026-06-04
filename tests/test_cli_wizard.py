@@ -18,6 +18,11 @@ from factory.cli import (
     _welcome_wizard,
     main,
 )
+from factory.models import AgentRunResult
+
+
+def _mock_run_result(stdout: str, return_code: int = 0) -> AgentRunResult:
+    return AgentRunResult(stdout=stdout, return_code=return_code)
 
 
 # -- TTY detection --------------------------------------------------------
@@ -147,7 +152,7 @@ class TestClassifyWithLLM:
             ],
         }
         mock_runner = MagicMock()
-        mock_runner.headless = AsyncMock(return_value=(json.dumps(response), 0, None))
+        mock_runner.headless = AsyncMock(return_value=_mock_run_result(json.dumps(response)))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("fix a bug in my project")
@@ -168,7 +173,7 @@ class TestClassifyWithLLM:
             ],
         }
         mock_runner = MagicMock()
-        mock_runner.headless = AsyncMock(return_value=(json.dumps(response), 0, None))
+        mock_runner.headless = AsyncMock(return_value=_mock_run_result(json.dumps(response)))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("weather CLI")
@@ -186,7 +191,7 @@ class TestClassifyWithLLM:
             {"label": "Build directly", "explanation": "Start building.", "command": 'factory ceo "weather CLI"'},
         ]
         mock_runner = MagicMock()
-        mock_runner.headless = AsyncMock(return_value=(json.dumps(suggestions), 0, None))
+        mock_runner.headless = AsyncMock(return_value=_mock_run_result(json.dumps(suggestions)))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("weather CLI")
@@ -199,7 +204,7 @@ class TestClassifyWithLLM:
     def test_json_with_markdown_wrapper(self) -> None:
         raw = '```json\n{"follow_ups": [], "suggestions": [{"label": "Build it", "explanation": "Go.", "command": "factory ceo \\"test\\""}]}\n```'
         mock_runner = MagicMock()
-        mock_runner.headless = AsyncMock(return_value=(raw, 0, None))
+        mock_runner.headless = AsyncMock(return_value=_mock_run_result(raw))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("test")
@@ -211,7 +216,7 @@ class TestClassifyWithLLM:
 
     def test_invalid_json_returns_none(self) -> None:
         mock_runner = MagicMock()
-        mock_runner.headless = AsyncMock(return_value=("not valid json at all", 0, None))
+        mock_runner.headless = AsyncMock(return_value=_mock_run_result("not valid json at all"))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("weather CLI")
@@ -220,7 +225,7 @@ class TestClassifyWithLLM:
 
     def test_runner_failure_returns_none(self) -> None:
         mock_runner = MagicMock()
-        mock_runner.headless = AsyncMock(return_value=("Error", 1, None))
+        mock_runner.headless = AsyncMock(return_value=_mock_run_result("Error", 1))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("weather CLI")
@@ -236,7 +241,7 @@ class TestClassifyWithLLM:
     def test_empty_suggestions_returns_none(self) -> None:
         response = {"follow_ups": [], "suggestions": []}
         mock_runner = MagicMock()
-        mock_runner.headless = AsyncMock(return_value=(json.dumps(response), 0, None))
+        mock_runner.headless = AsyncMock(return_value=_mock_run_result(json.dumps(response)))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("test idea")
@@ -246,7 +251,7 @@ class TestClassifyWithLLM:
     def test_missing_required_fields_returns_none(self) -> None:
         response = {"follow_ups": [], "suggestions": [{"label": "Test"}]}  # missing command
         mock_runner = MagicMock()
-        mock_runner.headless = AsyncMock(return_value=(json.dumps(response), 0, None))
+        mock_runner.headless = AsyncMock(return_value=_mock_run_result(json.dumps(response)))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("test idea")
@@ -262,7 +267,7 @@ class TestClassifyWithLLM:
             ],
         }
         mock_runner = MagicMock()
-        mock_runner.headless = AsyncMock(return_value=(json.dumps(response), 0, None))
+        mock_runner.headless = AsyncMock(return_value=_mock_run_result(json.dumps(response)))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("test")
@@ -901,9 +906,9 @@ class TestClassifyWithLLMWizardFile:
         }
         mock_runner = MagicMock()
 
-        async def capture_headless(prompt, task, cwd, **kwargs):
-            captured_prompt["value"] = prompt
-            return (json.dumps(response), 0, None)
+        async def capture_headless(request):
+            captured_prompt["value"] = request.prompt
+            return _mock_run_result(json.dumps(response))
 
         mock_runner.headless = capture_headless
 
@@ -932,9 +937,9 @@ class TestClassifyWithLLMWizardFile:
         }
         mock_runner = MagicMock()
 
-        async def capture_headless(prompt, task, cwd, **kwargs):
-            captured_prompt["value"] = prompt
-            return (json.dumps(response), 0, None)
+        async def capture_headless(request):
+            captured_prompt["value"] = request.prompt
+            return _mock_run_result(json.dumps(response))
 
         mock_runner.headless = capture_headless
 
@@ -957,7 +962,7 @@ class TestClassifyWithLLMWizardFile:
             ],
         }
         mock_runner = MagicMock()
-        mock_runner.headless = AsyncMock(return_value=(json.dumps(response), 0, None))
+        mock_runner.headless = AsyncMock(return_value=_mock_run_result(json.dumps(response)))
 
         with patch("factory.runners.get_runner", return_value=mock_runner):
             result = _classify_with_llm("~/.factory/wizard_input.md")
@@ -975,9 +980,9 @@ class TestClassifyWithLLMWizardFile:
         }
         mock_runner = MagicMock()
 
-        async def capture_headless(prompt, task, cwd, **kwargs):
-            captured_prompt["value"] = prompt
-            return (json.dumps(response), 0, None)
+        async def capture_headless(request):
+            captured_prompt["value"] = request.prompt
+            return _mock_run_result(json.dumps(response))
 
         mock_runner.headless = capture_headless
 

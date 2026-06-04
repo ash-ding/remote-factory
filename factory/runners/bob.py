@@ -2,27 +2,31 @@
 
 from __future__ import annotations
 
-import asyncio
-import logging
 import os
 import shutil
+import subprocess as _subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-import subprocess as _subprocess
+from typing import TYPE_CHECKING
 
-from factory.runners._stream import should_stream, stream_subprocess
+import structlog
+
+from factory.runners._subprocess import run_subprocess
 from factory.runners.usage import (
     CeilingExceededError,
     check_ceilings,
     log_usage,
 )
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from factory.models import AgentRunRequest, AgentRunResult
+    from factory.runners.protocol import RunnerMeta
+
+log = structlog.get_logger()
 
 _auth_checked = False
 
-# File where we persist the API key for nested subagent spawns
 _AUTH_FILE_NAME = ".bob_auth"
 
 
@@ -37,10 +41,7 @@ class BobAuthError(Exception):
 
 
 def _find_auth_file(start_path: Path) -> Path | None:
-    """Search for the auth file starting from start_path and walking up.
-
-    Returns the path to the auth file if found, or None.
-    """
+    """Search for the auth file starting from start_path and walking up."""
     path = start_path.resolve()
     while path != path.parent:
         auth_file = path / ".factory" / _AUTH_FILE_NAME
@@ -51,15 +52,7 @@ def _find_auth_file(start_path: Path) -> Path | None:
 
 
 def _persist_key(project_path: Path) -> None:
-    """Persist BOBSHELL_API_KEY to a file for nested subagent spawns.
-
-    Only writes if:
-    - BOBSHELL_API_KEY is set in the environment
-    - The .factory directory exists
-    - The file doesn't already exist (or we're updating it)
-
-    The file is created with chmod 600 for security.
-    """
+    """Persist BOBSHELL_API_KEY to a file for nested subagent spawns."""
     key = os.environ.get("BOBSHELL_API_KEY")
     if not key:
         return
@@ -72,35 +65,21 @@ def _persist_key(project_path: Path) -> None:
     try:
         auth_file.write_text(key)
         auth_file.chmod(0o600)
-        logger.debug("Persisted BOBSHELL_API_KEY to %s", auth_file)
+        log.debug("bob_key_persisted", path=str(auth_file))
     except OSError as e:
-        logger.warning("Failed to persist API key: %s", e)
+        log.warning("bob_key_persist_failed", error=str(e))
 
 
 def _check_auth(start_path: Path | None = None) -> None:
-    """Check that BOBSHELL_API_KEY is set (once per process).
-
-    Resolution order:
-    1. Environment variable BOBSHELL_API_KEY
-    2. File .factory/.bob_auth (searched from start_path upward, or cwd if None)
-
-    If found in file, injects into os.environ for subprocess inheritance.
-
-    Limitation: _auth_checked is a module-level flag, so the check only runs once
-    per Python process. If the key changes or expires mid-session, the cached
-    result won't reflect that. For long-running processes, consider restarting
-    the factory rather than relying on key rotation.
-    """
+    """Check that BOBSHELL_API_KEY is set (once per process)."""
     global _auth_checked
     if _auth_checked:
         return
 
-    # First check environment variable
     if os.environ.get("BOBSHELL_API_KEY"):
         _auth_checked = True
         return
 
-    # Fall back to file-based persistence
     search_from = start_path if start_path is not None else Path.cwd()
     auth_file = _find_auth_file(search_from)
     if auth_file:
@@ -108,11 +87,17 @@ def _check_auth(start_path: Path | None = None) -> None:
             key = auth_file.read_text().strip()
             if key:
                 os.environ["BOBSHELL_API_KEY"] = key
-                logger.info("Loaded BOBSHELL_API_KEY from %s", auth_file)
+                log.info("bob_key_loaded", path=str(auth_file))
                 _auth_checked = True
                 return
         except OSError as e:
-            logger.warning("Failed to read auth file %s: %s", auth_file, e)
+            log.warning("bob_auth_file_read_failed", path=str(auth_file), error=str(e))
+
+    bob_config = Path.home() / ".bob" / "settings.json"
+    if bob_config.is_file():
+        log.info("bob_native_auth_detected", path=str(bob_config))
+        _auth_checked = True
+        return
 
     raise BobAuthError()
 
@@ -126,11 +111,7 @@ def is_dry_run() -> bool:
 
 
 def _get_bob_bin_dir() -> str | None:
-    """Find the directory containing the bob binary.
-
-    Used to prepend to PATH so that the correct Node version is found
-    when bob's shebang resolves `#!/usr/bin/env node`.
-    """
+    """Find the directory containing the bob binary."""
     bob_path = shutil.which("bob")
     if bob_path:
         return str(Path(bob_path).parent)
@@ -138,24 +119,17 @@ def _get_bob_bin_dir() -> str | None:
 
 
 def _make_env_with_bob_path() -> dict[str, str]:
-    """Create environment dict with bob's bin directory prepended to PATH.
-
-    Bob Shell's shebang is `#!/usr/bin/env node`. If multiple Node version
-    managers (nvm, fnm, volta) are installed, the wrong Node may be found.
-    Prepending bob's bin directory ensures its companion node is used.
-    """
+    """Create environment dict with bob's bin directory prepended to PATH."""
     env = dict(os.environ)
     bob_bin_dir = _get_bob_bin_dir()
     if bob_bin_dir:
         current_path = env.get("PATH", "")
         if not current_path.startswith(bob_bin_dir):
             env["PATH"] = f"{bob_bin_dir}:{current_path}"
-            logger.debug("Prepended bob bin dir to PATH: %s", bob_bin_dir)
+            log.debug("bob_path_prepended", dir=bob_bin_dir)
     return env
 
 
-# Bob Shell only supports built-in modes: plan, code, advanced, ask.
-# We use 'code' mode for agent work; the role is injected via the prompt.
 _BOB_CHAT_MODE = "code"
 
 
@@ -164,22 +138,28 @@ class BobRunner:
 
     name: str = "bob"
 
+    @classmethod
+    def metadata(cls) -> RunnerMeta:
+        from factory.runners.protocol import RunnerMeta
+        return RunnerMeta(
+            name="bob",
+            display_name="Bob Shell",
+            binary="bob",
+            install_hint="npm install -g bob-shell",
+            required_env_vars=["BOBSHELL_API_KEY"],
+            supports_model_override=False,
+            supports_usage_telemetry=False,
+            supports_session_name=False,
+        )
+
     def __init__(
         self,
         cycle_start: datetime | None = None,
         project_path: Path | None = None,
     ) -> None:
-        """Initialize BobRunner.
-
-        Args:
-            cycle_start: Start time of the current factory cycle (for ceiling tracking).
-                If not provided and project_path is given, reads from cycle.json.
-            project_path: Path to the project (used to read cycle state from cycle.json).
-        """
         if cycle_start is not None:
             self.cycle_start = cycle_start
         elif project_path is not None:
-            # Lazy import: ceo_completion imports runners, so module-level import would cycle
             from factory.ceo_completion import read_cycle_state
 
             state = read_cycle_state(project_path)
@@ -188,128 +168,74 @@ class BobRunner:
             self.cycle_start = datetime.now(timezone.utc)
         self._role: str = "unknown"
 
-    async def headless(
-        self,
-        prompt: str,
-        task: str,
-        cwd: Path,
-        *,
-        timeout: float = 600.0,
-        model: str | None = None,
-        dangerously_skip_permissions: bool = True,
-        role: str = "unknown",
-        session_name: str | None = None,
-        tmux_persist: bool = False,
-    ) -> tuple[str, int, None]:
-        """Run a headless Bob Shell invocation.
+    def build_command(self, request: AgentRunRequest) -> tuple[list[str], dict[str, str], list[Path]]:
+        """Build the Bob Shell CLI command and env dict."""
+        chat_mode = _BOB_CHAT_MODE
+        full_task = f"{request.prompt}\n\n---\n\n## Current Task\n\n{request.task}"
 
-        Returns (stdout, return_code, None). Bob has no token telemetry.
-        """
-        _ = session_name
+        cmd = ["bob", "-p", full_task, f"--chat-mode={chat_mode}"]
+        if request.skip_permissions:
+            cmd.append("--yolo")
+
+        env = _make_env_with_bob_path()
+        return cmd, env, []
+
+    async def headless(self, request: AgentRunRequest) -> AgentRunResult:
+        """Run a headless Bob Shell invocation."""
+        from factory.models import AgentRunResult
+
+        tmux_persist = request.extras.get("tmux_persist", False)
         if tmux_persist:
-            logger.warning("tmux_persist not supported with bob runner")
-        self._role = role
-        project_path = self._find_project_path(cwd)
+            log.warning("bob_tmux_not_supported")
+        self._role = request.role
+        project_path = request.project_path or self._find_project_path(request.cwd)
 
-        # Persist key for nested subagent spawns (before dry-run check so file exists)
         _persist_key(project_path)
 
         if is_dry_run():
-            stdout, code = self._dry_run_response(role, cwd, task)
-            return stdout, code, None
+            from factory.runners._subprocess import make_dry_run_result
+            result = make_dry_run_result("bob", request.role, request.cwd, request.task)
+            log_usage(project_path, request.role, request.cwd, 0.0, 0, dry_run=True)
+            return result
 
-        _check_auth(cwd)
+        _check_auth(request.cwd)
 
         try:
             check_ceilings(project_path, self.cycle_start)
         except CeilingExceededError as e:
             self._emit_ceiling_event(project_path, e)
-            return str(e), 1, None
+            return AgentRunResult(stdout=str(e), return_code=1)
 
-        # NOTE: Custom modes are not supported in Bob Shell (unlike Claude Code).
-        # The agent role definition is injected via the prompt instead.
+        cmd, env, _ = self.build_command(request)
 
-        chat_mode = _BOB_CHAT_MODE
-        full_task = f"{prompt}\n\n---\n\n## Current Task\n\n{task}"
+        log.info("bob_headless", cwd=str(request.cwd), role=request.role, chat_mode=_BOB_CHAT_MODE)
 
-        cmd = ["bob", "-p", full_task, f"--chat-mode={chat_mode}"]
-        if dangerously_skip_permissions:
-            cmd.append("--yolo")
-
-        logger.info("BobRunner headless: cwd=%s, role=%s, chat_mode=%s", cwd, role, chat_mode)
-
-        env = _make_env_with_bob_path()
         start_time = time.monotonic()
 
-        stream = should_stream()
-        prefix = f"[bob:{role}]" if stream else None
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
-                env=env,
-            )
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                # sanitize=True: Bob is a TUI emitting cursor/clear/alt-screen
-                # escapes — strip them from the live terminal write (the captured
-                # buffer stays raw). See issue #379.
-                stream_subprocess(proc, stream=stream, prefix=prefix, sanitize=True),
-                timeout=timeout,
-            )
-        except asyncio.TimeoutError:
-            proc.kill()  # type: ignore[union-attr]
-            await proc.wait()  # type: ignore[union-attr]
-            duration = time.monotonic() - start_time
-            log_usage(project_path, role, cwd, duration, 1, dry_run=False)
-            logger.error("BobRunner timed out after %ss", timeout)
-            return f"Agent timed out after {timeout}s", 1, None
-        except FileNotFoundError:
-            logger.error("'bob' CLI not found on PATH")
-            return "Error: 'bob' CLI not found on PATH", 1, None
+        result = await run_subprocess(
+            cmd, cwd=str(request.cwd), env=env,
+            timeout=request.timeout, runner_name="bob", role=request.role,
+            sanitize=True,
+        )
 
         duration = time.monotonic() - start_time
-        return_code = proc.returncode or 0
+        log_usage(project_path, request.role, request.cwd, duration, result.return_code, dry_run=False)
 
-        log_usage(project_path, role, cwd, duration, return_code, dry_run=False)
+        return result
 
-        stdout = stdout_bytes.decode()
-        stderr = stderr_bytes.decode()
-
-        if return_code != 0:
-            logger.warning("BobRunner exited with code %d: %s", return_code, stderr[:200])
-
-        return stdout, return_code, None
-
-    def interactive_run(
-        self,
-        prompt: str,
-        task: str,
-        cwd: Path,
-        *,
-        model: str | None = None,
-        role: str = "ceo",
-        dangerously_skip_permissions: bool = False,
-        session_name: str | None = None,
-    ) -> int:
-        """Run an interactive Bob Shell session as a subprocess.
-
-        Returns the exit code so the caller can clean up in a finally block.
-        """
-        _ = session_name
-        project_path = self._find_project_path(cwd)
+    def interactive_run(self, request: AgentRunRequest) -> int:
+        """Run an interactive Bob Shell session as a subprocess."""
+        project_path = request.project_path or self._find_project_path(request.cwd)
 
         _persist_key(project_path)
 
         if is_dry_run():
-            yolo_flag = " --yolo" if dangerously_skip_permissions else ""
-            print(f"[DRY-RUN] Would run: bob --chat-mode=factory-{role}{yolo_flag}")
-            print(f"[DRY-RUN] Task: {task[:200]}...")
+            yolo_flag = " --yolo" if request.skip_permissions else ""
+            print(f"[DRY-RUN] Would run: bob --chat-mode=factory-{request.role}{yolo_flag}")
+            print(f"[DRY-RUN] Task: {request.task[:200]}...")
             return 0
 
-        _check_auth(cwd)
+        _check_auth(request.cwd)
 
         try:
             check_ceilings(project_path, self.cycle_start)
@@ -318,23 +244,23 @@ class BobRunner:
             return 1
 
         chat_mode = _BOB_CHAT_MODE
-        full_task = f"{prompt}\n\n---\n\n## Current Task\n\n{task}"
+        full_task = f"{request.prompt}\n\n---\n\n## Current Task\n\n{request.task}"
 
         cmd = [
             "bob",
             f"--chat-mode={chat_mode}",
             "-i", full_task,
         ]
-        if dangerously_skip_permissions:
+        if request.skip_permissions:
             cmd.append("--yolo")
 
-        logger.info("BobRunner interactive_run: cwd=%s, chat_mode=%s", cwd, chat_mode)
+        log.info("bob_interactive", cwd=str(request.cwd), chat_mode=chat_mode)
 
         bob_bin_dir = _get_bob_bin_dir()
         if bob_bin_dir and not os.environ.get("PATH", "").startswith(bob_bin_dir):
             os.environ["PATH"] = f"{bob_bin_dir}:{os.environ.get('PATH', '')}"
 
-        result = _subprocess.run(cmd, cwd=cwd)
+        result = _subprocess.run(cmd, cwd=request.cwd)
         return result.returncode
 
     def _find_project_path(self, cwd: Path) -> Path:
@@ -345,23 +271,6 @@ class BobRunner:
                 return path
             path = path.parent
         return cwd.resolve()
-
-    def _dry_run_response(self, role: str, cwd: Path, task: str) -> tuple[str, int]:
-        """Return a stub response for dry-run mode."""
-        project_path = self._find_project_path(cwd)
-
-        log_usage(project_path, role, cwd, 0.0, 0, dry_run=True)
-
-        response = (
-            f"[DRY-RUN] BobRunner would have executed:\n"
-            f"  role: {role}\n"
-            f"  cwd: {cwd}\n"
-            f"  task: {task[:100]}...\n"
-            f"\n"
-            f"Dry-run stub response: Task acknowledged."
-        )
-        logger.info("BobRunner dry-run: role=%s, cwd=%s", role, cwd)
-        return response, 0
 
     def _emit_ceiling_event(self, project_path: Path, error: CeilingExceededError) -> None:
         """Emit a structured event when a ceiling is hit."""
@@ -379,6 +288,4 @@ class BobRunner:
                 },
             )
         except Exception:
-            logger.debug("Failed to emit ceiling event", exc_info=True)
-
-
+            log.debug("bob_ceiling_event_failed", exc_info=True)
