@@ -185,6 +185,7 @@ async def invoke_agent(
         skip_permissions=dangerously_skip_permissions,
         role=role,
         session_name=agent_session_name,
+        project_path=project_path,
         extras={"tmux_persist": tmux_persist},
     )
 

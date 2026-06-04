@@ -133,7 +133,8 @@ class TestCodexEnvMapping:
 
         from factory.runners.codex import _make_codex_env
 
-        env = _make_codex_env()
+        env, tmpdir = _make_codex_env()
+        tmpdir.cleanup()
         assert env["OPENAI_API_KEY"] == "my-codex-key"
         assert "VIRTUAL_ENV" not in env
 
@@ -143,7 +144,8 @@ class TestCodexEnvMapping:
 
         from factory.runners.codex import _make_codex_env
 
-        env = _make_codex_env()
+        env, tmpdir = _make_codex_env()
+        tmpdir.cleanup()
         assert env["OPENAI_API_KEY"] == "openai-key"
 
     def test_virtual_env_stripped(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -151,7 +153,8 @@ class TestCodexEnvMapping:
 
         from factory.runners.codex import _make_codex_env
 
-        env = _make_codex_env()
+        env, tmpdir = _make_codex_env()
+        tmpdir.cleanup()
         assert "VIRTUAL_ENV" not in env
 
 

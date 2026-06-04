@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import structlog
 
@@ -10,6 +11,20 @@ from factory.models import AgentRunResult
 from factory.runners._stream import should_stream, stream_subprocess
 
 log = structlog.get_logger()
+
+
+def make_dry_run_result(runner_name: str, role: str, cwd: Path, task: str) -> AgentRunResult:
+    """Return a stub AgentRunResult for dry-run mode."""
+    stdout = (
+        f"[DRY-RUN] {runner_name} would have executed:\n"
+        f"  role: {role}\n"
+        f"  cwd: {cwd}\n"
+        f"  task: {task[:100]}...\n"
+        f"\n"
+        f"Dry-run stub response: Task acknowledged."
+    )
+    log.info(f"{runner_name}_dry_run", role=role, cwd=str(cwd))
+    return AgentRunResult(stdout=stdout, return_code=0)
 
 
 async def run_subprocess(

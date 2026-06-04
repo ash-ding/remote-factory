@@ -43,6 +43,33 @@ def _check_auth() -> None:
     raise OpenCodeAuthError()
 
 
+def _find_opencode_bin_dir() -> str | None:
+    """Find the directory containing the opencode binary."""
+    import shutil
+
+    oc_path = shutil.which("opencode")
+    if oc_path:
+        return str(Path(oc_path).parent)
+    candidates = [
+        Path.home() / "go" / "bin",
+        Path(os.environ.get("GOPATH", "")) / "bin" if os.environ.get("GOPATH") else None,
+    ]
+    for d in candidates:
+        if d is not None and (d / "opencode").is_file():
+            return str(d)
+    return None
+
+
+def _prepend_opencode_path(env: dict[str, str]) -> None:
+    """Prepend the opencode binary directory to PATH if found."""
+    bin_dir = _find_opencode_bin_dir()
+    if bin_dir:
+        current_path = env.get("PATH", "")
+        if not current_path.startswith(bin_dir):
+            env["PATH"] = f"{bin_dir}:{current_path}"
+            log.debug("opencode_path_prepended", dir=bin_dir)
+
+
 def is_opencode_dry_run() -> bool:
     """Return True if OpenCode dry-run mode is enabled."""
     from factory.user_config import resolve
@@ -65,23 +92,15 @@ class OpenCodeRunner:
             binary="opencode",
             install_hint="go install github.com/opencode-ai/opencode@latest",
             required_env_vars=["OPENAI_API_KEY"],
-            supports_model_override=False,
+            supports_model_override=True,
             supports_interactive=True,
             supports_streaming=True,
             supports_usage_telemetry=False,
             supports_session_name=False,
         )
 
-    async def headless(self, request: AgentRunRequest) -> AgentRunResult:
-        """Run a headless OpenCode invocation."""
-        from factory.models import AgentRunResult
-
-        if is_opencode_dry_run():
-            stdout, code = self._dry_run_response(request.role, request.cwd, request.task)
-            return AgentRunResult(stdout=stdout, return_code=code)
-
-        _check_auth()
-
+    def build_command(self, request: AgentRunRequest) -> tuple[list[str], dict[str, str], list[Path]]:
+        """Build the OpenCode CLI command and env dict."""
         full_prompt = f"{request.prompt}\n\n---\n\n## Current Task\n\n{request.task}"
 
         cmd = [
@@ -91,10 +110,29 @@ class OpenCodeRunner:
             "-f", "json",
             "-q",
         ]
-
-        log.info("opencode_headless", cwd=str(request.cwd), role=request.role)
+        if request.skip_permissions:
+            cmd.append("--dangerously-skip-permissions")
+        if request.model:
+            cmd.extend(["--model", request.model])
 
         env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+        _prepend_opencode_path(env)
+
+        return cmd, env, []
+
+    async def headless(self, request: AgentRunRequest) -> AgentRunResult:
+        """Run a headless OpenCode invocation."""
+        from factory.models import AgentRunResult
+
+        if is_opencode_dry_run():
+            from factory.runners._subprocess import make_dry_run_result
+            return make_dry_run_result("opencode", request.role, request.cwd, request.task)
+
+        _check_auth()
+
+        cmd, env, _ = self.build_command(request)
+
+        log.info("opencode_headless", cwd=str(request.cwd), role=request.role)
 
         result = await run_subprocess(
             cmd, cwd=str(request.cwd), env=env,
@@ -127,18 +165,9 @@ class OpenCodeRunner:
 
         log.info("opencode_interactive", cwd=str(request.cwd))
 
-        result = subprocess.run(cmd, cwd=request.cwd)
+        env = dict(os.environ)
+        _prepend_opencode_path(env)
+
+        result = subprocess.run(cmd, cwd=request.cwd, env=env)
         return result.returncode
 
-    def _dry_run_response(self, role: str, cwd: Path, task: str) -> tuple[str, int]:
-        """Return a stub response for dry-run mode."""
-        response = (
-            f"[DRY-RUN] OpenCodeRunner would have executed:\n"
-            f"  role: {role}\n"
-            f"  cwd: {cwd}\n"
-            f"  task: {task[:100]}...\n"
-            f"\n"
-            f"Dry-run stub response: Task acknowledged."
-        )
-        log.info("opencode_dry_run", role=role, cwd=str(cwd))
-        return response, 0

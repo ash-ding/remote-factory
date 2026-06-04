@@ -162,6 +162,18 @@ class BobRunner:
             self.cycle_start = datetime.now(timezone.utc)
         self._role: str = "unknown"
 
+    def build_command(self, request: AgentRunRequest) -> tuple[list[str], dict[str, str], list[Path]]:
+        """Build the Bob Shell CLI command and env dict."""
+        chat_mode = _BOB_CHAT_MODE
+        full_task = f"{request.prompt}\n\n---\n\n## Current Task\n\n{request.task}"
+
+        cmd = ["bob", "-p", full_task, f"--chat-mode={chat_mode}"]
+        if request.skip_permissions:
+            cmd.append("--yolo")
+
+        env = _make_env_with_bob_path()
+        return cmd, env, []
+
     async def headless(self, request: AgentRunRequest) -> AgentRunResult:
         """Run a headless Bob Shell invocation."""
         from factory.models import AgentRunResult
@@ -170,13 +182,15 @@ class BobRunner:
         if tmux_persist:
             log.warning("bob_tmux_not_supported")
         self._role = request.role
-        project_path = self._find_project_path(request.cwd)
+        project_path = request.project_path or self._find_project_path(request.cwd)
 
         _persist_key(project_path)
 
         if is_dry_run():
-            stdout, code = self._dry_run_response(request.role, request.cwd, request.task)
-            return AgentRunResult(stdout=stdout, return_code=code)
+            from factory.runners._subprocess import make_dry_run_result
+            result = make_dry_run_result("bob", request.role, request.cwd, request.task)
+            log_usage(project_path, request.role, request.cwd, 0.0, 0, dry_run=True)
+            return result
 
         _check_auth(request.cwd)
 
@@ -186,16 +200,10 @@ class BobRunner:
             self._emit_ceiling_event(project_path, e)
             return AgentRunResult(stdout=str(e), return_code=1)
 
-        chat_mode = _BOB_CHAT_MODE
-        full_task = f"{request.prompt}\n\n---\n\n## Current Task\n\n{request.task}"
+        cmd, env, _ = self.build_command(request)
 
-        cmd = ["bob", "-p", full_task, f"--chat-mode={chat_mode}"]
-        if request.skip_permissions:
-            cmd.append("--yolo")
+        log.info("bob_headless", cwd=str(request.cwd), role=request.role, chat_mode=_BOB_CHAT_MODE)
 
-        log.info("bob_headless", cwd=str(request.cwd), role=request.role, chat_mode=chat_mode)
-
-        env = _make_env_with_bob_path()
         start_time = time.monotonic()
 
         result = await run_subprocess(
@@ -211,7 +219,7 @@ class BobRunner:
 
     def interactive_run(self, request: AgentRunRequest) -> int:
         """Run an interactive Bob Shell session as a subprocess."""
-        project_path = self._find_project_path(request.cwd)
+        project_path = request.project_path or self._find_project_path(request.cwd)
 
         _persist_key(project_path)
 
@@ -257,23 +265,6 @@ class BobRunner:
                 return path
             path = path.parent
         return cwd.resolve()
-
-    def _dry_run_response(self, role: str, cwd: Path, task: str) -> tuple[str, int]:
-        """Return a stub response for dry-run mode."""
-        project_path = self._find_project_path(cwd)
-
-        log_usage(project_path, role, cwd, 0.0, 0, dry_run=True)
-
-        response = (
-            f"[DRY-RUN] BobRunner would have executed:\n"
-            f"  role: {role}\n"
-            f"  cwd: {cwd}\n"
-            f"  task: {task[:100]}...\n"
-            f"\n"
-            f"Dry-run stub response: Task acknowledged."
-        )
-        log.info("bob_dry_run", role=role, cwd=str(cwd))
-        return response, 0
 
     def _emit_ceiling_event(self, project_path: Path, error: CeilingExceededError) -> None:
         """Emit a structured event when a ceiling is hit."""

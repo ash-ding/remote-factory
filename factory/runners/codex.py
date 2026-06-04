@@ -83,19 +83,8 @@ class CodexRunner:
             supports_session_name=False,
         )
 
-    async def headless(self, request: AgentRunRequest) -> AgentRunResult:
-        """Run a headless Codex CLI invocation via ``codex exec``."""
-        from factory.models import AgentRunResult
-
-        tmux_persist = request.extras.get("tmux_persist", False)
-        if tmux_persist:
-            log.warning("codex_tmux_not_supported")
-        if is_codex_dry_run():
-            stdout, code = self._dry_run_response(request.role, request.cwd, request.task)
-            return AgentRunResult(stdout=stdout, return_code=code)
-
-        _check_auth()
-
+    def build_command(self, request: AgentRunRequest) -> tuple[list[str], dict[str, str], list[Path]]:
+        """Build the Codex CLI command, env dict, and temp files."""
         full_prompt = f"{request.prompt}\n\n---\n\n## Current Task\n\n{request.task}"
 
         cmd = ["codex", "exec", full_prompt, "--ignore-user-config"]
@@ -106,16 +95,33 @@ class CodexRunner:
         if request.model:
             cmd.extend(["--model", request.model])
 
+        env, tmpdir = _make_codex_env()
+        self._tmpdir = tmpdir
+        return cmd, env, []
+
+    async def headless(self, request: AgentRunRequest) -> AgentRunResult:
+        """Run a headless Codex CLI invocation via ``codex exec``."""
+        tmux_persist = request.extras.get("tmux_persist", False)
+        if tmux_persist:
+            log.warning("codex_tmux_not_supported")
+        if is_codex_dry_run():
+            from factory.runners._subprocess import make_dry_run_result
+            return make_dry_run_result("codex", request.role, request.cwd, request.task)
+
+        _check_auth()
+
+        cmd, env, _ = self.build_command(request)
+
         log.info("codex_headless", cwd=str(request.cwd), model=request.model, role=request.role)
 
-        env, tmpdir = _make_codex_env()
         try:
             return await run_subprocess(
                 cmd, cwd=str(request.cwd), env=env,
                 timeout=request.timeout, runner_name="codex", role=request.role,
             )
         finally:
-            tmpdir.cleanup()
+            if hasattr(self, "_tmpdir"):
+                self._tmpdir.cleanup()
 
     def interactive_run(self, request: AgentRunRequest) -> int:
         """Run an interactive Codex CLI session as a subprocess."""
@@ -145,15 +151,3 @@ class CodexRunner:
         finally:
             tmpdir.cleanup()
 
-    def _dry_run_response(self, role: str, cwd: Path, task: str) -> tuple[str, int]:
-        """Return a stub response for dry-run mode."""
-        response = (
-            f"[DRY-RUN] CodexRunner would have executed:\n"
-            f"  role: {role}\n"
-            f"  cwd: {cwd}\n"
-            f"  task: {task[:100]}...\n"
-            f"\n"
-            f"Dry-run stub response: Task acknowledged."
-        )
-        log.info("codex_dry_run", role=role, cwd=str(cwd))
-        return response, 0

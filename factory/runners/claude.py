@@ -54,6 +54,33 @@ class ClaudeRunner:
             supports_session_name=True,
         )
 
+    def build_command(self, request: AgentRunRequest) -> tuple[list[str], dict[str, str], list[Path]]:
+        """Build the Claude CLI command, env dict, and temp files."""
+        prompt_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", prefix="factory-prompt-", delete=False,
+        )
+        prompt_file.write(request.prompt)
+        prompt_file.close()
+        prompt_path = Path(prompt_file.name)
+
+        cmd = [
+            "claude", "--append-system-prompt-file", prompt_file.name,
+            "-p", request.task,
+            "--output-format", "json",
+        ]
+        if request.skip_permissions:
+            cmd.append("--dangerously-skip-permissions")
+        if request.model:
+            cmd.extend(["--model", request.model])
+        if request.session_name:
+            cmd.extend(["--name", request.session_name])
+
+        env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+        if request.model:
+            env["FACTORY_MODEL"] = request.model
+
+        return cmd, env, [prompt_path]
+
     async def headless(self, request: AgentRunRequest) -> AgentRunResult:
         """Run a headless Claude Code invocation."""
         from factory.models import AgentRunResult
@@ -72,30 +99,9 @@ class ClaudeRunner:
                 return AgentRunResult(stdout=stdout, return_code=rc, usage=usage)
             log.warning("tmux_not_available")
 
-        prompt_file = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", prefix="factory-prompt-", delete=False,
-        )
+        cmd, env, temp_files = self.build_command(request)
         try:
-            prompt_file.write(request.prompt)
-            prompt_file.close()
-
-            cmd = [
-                "claude", "--append-system-prompt-file", prompt_file.name,
-                "-p", request.task,
-                "--output-format", "json",
-            ]
-            if request.skip_permissions:
-                cmd.append("--dangerously-skip-permissions")
-            if request.model:
-                cmd.extend(["--model", request.model])
-            if request.session_name:
-                cmd.extend(["--name", request.session_name])
-
             log.info("claude_headless", cwd=str(request.cwd), model=request.model)
-
-            env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
-            if request.model:
-                env["FACTORY_MODEL"] = request.model
 
             result = await run_subprocess(
                 cmd, cwd=str(request.cwd), env=env,
@@ -120,7 +126,8 @@ class ClaudeRunner:
                 metadata=result.metadata,
             )
         finally:
-            Path(prompt_file.name).unlink(missing_ok=True)
+            for f in temp_files:
+                f.unlink(missing_ok=True)
 
     def interactive_run(self, request: AgentRunRequest) -> int:
         """Run an interactive Claude Code session as a subprocess."""

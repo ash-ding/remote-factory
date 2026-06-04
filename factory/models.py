@@ -580,6 +580,7 @@ class AgentRunRequest(BaseModel):
     skip_permissions: bool = True
     role: str = "unknown"
     session_name: str | None = None
+    project_path: Path | None = None
     extras: dict[str, object] = {}
 
 

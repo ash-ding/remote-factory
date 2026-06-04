@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
@@ -43,6 +44,10 @@ class Runner(Protocol):
     @classmethod
     def metadata(cls) -> RunnerMeta:
         """Return metadata about this runner."""
+        ...
+
+    def build_command(self, request: AgentRunRequest) -> tuple[list[str], dict[str, str], list[Path]]:
+        """Build the CLI command, env dict, and temp files for a headless invocation."""
         ...
 
     async def headless(self, request: AgentRunRequest) -> AgentRunResult:
