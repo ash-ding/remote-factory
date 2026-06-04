@@ -235,52 +235,58 @@ class TestRunInTmux:
 
 class TestClaudeRunnerTmuxPersist:
     async def test_headless_delegates_to_run_in_tmux(self, tmp_path: Path) -> None:
+        from factory.models import AgentRunRequest
+
         runner = ClaudeRunner()
         (tmp_path / ".factory").mkdir()
+
+        request = AgentRunRequest(
+            prompt="test prompt", task="test task", cwd=tmp_path,
+            role="researcher", extras={"tmux_persist": True},
+        )
 
         with (
             patch("factory.runners._tmux_persist.tmux_available", return_value=True),
             patch("factory.runners._tmux_persist.run_in_tmux", new_callable=AsyncMock, return_value=("tmux output", 0, None)) as mock_run,
         ):
-            stdout, code, usage = await runner.headless(
-                prompt="test prompt", task="test task", cwd=tmp_path,
-                tmux_persist=True, role="researcher",
-            )
+            result = await runner.headless(request)
 
-            assert stdout == "tmux output"
-            assert code == 0
-            assert usage is None
+            assert result.stdout == "tmux output"
+            assert result.return_code == 0
+            assert result.usage is None
             mock_run.assert_called_once()
 
     async def test_headless_falls_back_when_tmux_unavailable(self, tmp_path: Path) -> None:
+        from factory.models import AgentRunRequest, AgentRunResult
+
         runner = ClaudeRunner()
 
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 0
+        request = AgentRunRequest(
+            prompt="test prompt", task="test task", cwd=tmp_path,
+            extras={"tmux_persist": True},
+        )
+
+        mock_result = AgentRunResult(stdout="headless output", return_code=0)
 
         with (
             patch("factory.runners._tmux_persist.tmux_available", return_value=False),
-            patch("factory.runners.claude.asyncio.create_subprocess_exec", return_value=mock_proc),
-            patch("factory.runners.claude.stream_subprocess", return_value=(b"headless output", b"")),
-            patch("factory.runners.claude.should_stream", return_value=False),
+            patch("factory.runners._subprocess.run_subprocess", new_callable=AsyncMock, return_value=mock_result),
         ):
-            stdout, code, _usage = await runner.headless(
-                prompt="test prompt", task="test task", cwd=tmp_path,
-                tmux_persist=True,
-            )
+            result = await runner.headless(request)
 
     async def test_headless_skips_tmux_when_not_requested(self, tmp_path: Path) -> None:
+        from factory.models import AgentRunRequest, AgentRunResult
+
         runner = ClaudeRunner()
 
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 0
+        request = AgentRunRequest(
+            prompt="test prompt", task="test task", cwd=tmp_path,
+            extras={"tmux_persist": False},
+        )
+
+        mock_result = AgentRunResult(stdout="normal", return_code=0)
 
         with (
-            patch("factory.runners.claude.asyncio.create_subprocess_exec", return_value=mock_proc),
-            patch("factory.runners.claude.stream_subprocess", return_value=(b"normal", b"")),
-            patch("factory.runners.claude.should_stream", return_value=False),
+            patch("factory.runners._subprocess.run_subprocess", new_callable=AsyncMock, return_value=mock_result),
         ):
-            stdout, code, _usage = await runner.headless(
-                prompt="test prompt", task="test task", cwd=tmp_path,
-                tmux_persist=False,
-            )
+            result = await runner.headless(request)

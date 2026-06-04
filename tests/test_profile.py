@@ -269,10 +269,13 @@ class TestBuildSynthesisTask:
 
 class TestSynthesizeProfile:
     async def test_invokes_runner(self, tmp_path: Path) -> None:
+        from factory.models import AgentRunResult
         from factory.profile import synthesize_profile
 
         mock_runner = AsyncMock()
-        mock_runner.headless = AsyncMock(return_value=("Synthesized profile text", 0, None))
+        mock_runner.headless = AsyncMock(return_value=AgentRunResult(
+            stdout="Synthesized profile text", return_code=0,
+        ))
 
         with patch("factory.runners.get_runner", return_value=mock_runner), \
              patch("factory.agents.runner.resolve_prompt", return_value="profiler prompt"):
@@ -281,10 +284,13 @@ class TestSynthesizeProfile:
         mock_runner.headless.assert_called_once()
 
     async def test_handles_failure(self, tmp_path: Path) -> None:
+        from factory.models import AgentRunResult
         from factory.profile import synthesize_profile
 
         mock_runner = AsyncMock()
-        mock_runner.headless = AsyncMock(return_value=("Error output", 1, None))
+        mock_runner.headless = AsyncMock(return_value=AgentRunResult(
+            stdout="Error output", return_code=1,
+        ))
 
         with patch("factory.runners.get_runner", return_value=mock_runner), \
              patch("factory.agents.runner.resolve_prompt", return_value="prompt"):
