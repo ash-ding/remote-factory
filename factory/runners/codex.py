@@ -32,29 +32,51 @@ class CodexAuthError(Exception):
         )
 
 
+def _has_codex_oauth() -> bool:
+    """Check if Codex has OAuth credentials in its default config."""
+    auth_file = Path.home() / ".codex" / "auth.json"
+    return auth_file.is_file()
+
+
+def _using_api_key() -> bool:
+    """Return True if an explicit API key is set in the environment."""
+    return bool(os.environ.get("CODEX_API_KEY") or os.environ.get("OPENAI_API_KEY"))
+
+
 def _check_auth() -> None:
-    """Check that CODEX_API_KEY or OPENAI_API_KEY is set (once per process)."""
+    """Check that Codex auth is available (API key or OAuth, once per process)."""
     global _auth_checked  # noqa: PLW0603
     if _auth_checked:
         return
-    if os.environ.get("CODEX_API_KEY") or os.environ.get("OPENAI_API_KEY"):
+    if _using_api_key():
+        _auth_checked = True
+        return
+    if _has_codex_oauth():
+        log.info("codex_oauth_detected")
         _auth_checked = True
         return
     raise CodexAuthError()
 
 
-def _make_codex_env() -> tuple[dict[str, str], tempfile.TemporaryDirectory[str]]:
+def _make_codex_env() -> tuple[dict[str, str], tempfile.TemporaryDirectory[str] | None]:
     """Build subprocess env with auth isolation.
 
-    Returns (env_dict, tmpdir_handle) — caller must keep tmpdir_handle alive
-    until the subprocess exits, then call .cleanup().
+    In API key mode, sets CODEX_HOME to a temp dir to avoid stale OAuth.
+    In OAuth mode, leaves CODEX_HOME unset so Codex uses ~/.codex/.
+
+    Returns (env_dict, tmpdir_handle_or_None) — caller must keep tmpdir_handle
+    alive until the subprocess exits, then call .cleanup() if not None.
     """
     env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
     if "OPENAI_API_KEY" not in env and "CODEX_API_KEY" in env:
         env["OPENAI_API_KEY"] = env["CODEX_API_KEY"]
-    tmpdir = tempfile.TemporaryDirectory(prefix="factory-codex-")
-    env["CODEX_HOME"] = tmpdir.name
-    return env, tmpdir
+
+    if _using_api_key():
+        tmpdir = tempfile.TemporaryDirectory(prefix="factory-codex-")
+        env["CODEX_HOME"] = tmpdir.name
+        return env, tmpdir
+
+    return env, None
 
 
 def is_codex_dry_run() -> bool:
@@ -87,7 +109,10 @@ class CodexRunner:
         """Build the Codex CLI command, env dict, and temp files."""
         full_prompt = f"{request.prompt}\n\n---\n\n## Current Task\n\n{request.task}"
 
-        cmd = ["codex", "exec", full_prompt, "--ignore-user-config"]
+        cmd = ["codex", "exec", full_prompt]
+
+        if _using_api_key():
+            cmd.append("--ignore-user-config")
 
         if request.skip_permissions:
             cmd.extend(["--sandbox", "workspace-write"])
@@ -120,7 +145,7 @@ class CodexRunner:
                 timeout=request.timeout, runner_name="codex", role=request.role,
             )
         finally:
-            if hasattr(self, "_tmpdir"):
+            if hasattr(self, "_tmpdir") and self._tmpdir is not None:
                 self._tmpdir.cleanup()
 
     def interactive_run(self, request: AgentRunRequest) -> int:
@@ -134,7 +159,10 @@ class CodexRunner:
 
         full_prompt = f"{request.prompt}\n\n---\n\n## Current Task\n\n{request.task}"
 
-        cmd = ["codex", full_prompt, "--ignore-user-config"]
+        cmd = ["codex", full_prompt]
+
+        if _using_api_key():
+            cmd.append("--ignore-user-config")
 
         if request.skip_permissions:
             cmd.extend(["--sandbox", "workspace-write"])
@@ -149,5 +177,6 @@ class CodexRunner:
             result = subprocess.run(cmd, cwd=request.cwd, env=env)
             return result.returncode
         finally:
-            tmpdir.cleanup()
+            if tmpdir is not None:
+                tmpdir.cleanup()
 

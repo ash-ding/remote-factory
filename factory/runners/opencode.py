@@ -91,7 +91,7 @@ class OpenCodeRunner:
             binary="opencode",
             install_hint="go install github.com/opencode-ai/opencode@latest",
             required_env_vars=["OPENAI_API_KEY"],
-            supports_model_override=True,
+            supports_model_override=False,
             supports_interactive=True,
             supports_streaming=True,
             supports_usage_telemetry=False,
@@ -108,10 +108,6 @@ class OpenCodeRunner:
             "-c", str(request.cwd),
             "-q",
         ]
-        if request.skip_permissions:
-            cmd.append("--dangerously-skip-permissions")
-        if request.model:
-            cmd.extend(["--model", request.model])
 
         env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
         _prepend_opencode_path(env)

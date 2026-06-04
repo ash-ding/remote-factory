@@ -93,6 +93,12 @@ def _check_auth(start_path: Path | None = None) -> None:
         except OSError as e:
             log.warning("bob_auth_file_read_failed", path=str(auth_file), error=str(e))
 
+    bob_config = Path.home() / ".bob" / "settings.json"
+    if bob_config.is_file():
+        log.info("bob_native_auth_detected", path=str(bob_config))
+        _auth_checked = True
+        return
+
     raise BobAuthError()
 
 
