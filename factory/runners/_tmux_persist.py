@@ -61,10 +61,10 @@ def _generate_settings(sentinel_path: Path, tmpdir: Path) -> Path:
     settings = {
         "hooks": {
             "Stop": [
-                {"hooks": [{"type": "command", "command": f"touch {sentinel_path}", "timeout": 5}]}
+                {"hooks": [{"type": "command", "command": f"touch {shlex.quote(str(sentinel_path))}", "timeout": 5}]}
             ],
             "StopFailure": [
-                {"hooks": [{"type": "command", "command": f"touch {sentinel_path}", "timeout": 5}]}
+                {"hooks": [{"type": "command", "command": f"touch {shlex.quote(str(sentinel_path))}", "timeout": 5}]}
             ],
         }
     }
@@ -137,10 +137,9 @@ async def run_in_tmux(
     exitcode_q = shlex.quote(str(exitcode_file))
     wrapper_script.write_text(
         "#!/bin/bash\n"
-        f"cleanup() {{ echo $? > {exitcode_q}; touch {sentinel_q}; }}\n"
+        f"cleanup() {{ local rc=$?; echo $rc > {exitcode_q}; touch {sentinel_q}; }}\n"
         "trap cleanup EXIT\n"
         f"{script_line}"
-        f"echo $? > {exitcode_q}\n"
     )
     wrapper_script.chmod(0o755)
 
