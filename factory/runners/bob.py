@@ -102,6 +102,17 @@ def _check_auth(start_path: Path | None = None) -> None:
     raise BobAuthError()
 
 
+def _has_bob_auth() -> bool:
+    """Check if Bob auth is available via any supported method."""
+    if os.environ.get("BOBSHELL_API_KEY"):
+        return True
+    auth_file = _find_auth_file(Path.cwd())
+    if auth_file and auth_file.is_file():
+        return True
+    bob_config = Path.home() / ".bob" / "settings.json"
+    return bob_config.is_file()
+
+
 def is_dry_run() -> bool:
     """Return True if dry-run mode is enabled."""
     from factory.user_config import resolve
@@ -150,6 +161,7 @@ class BobRunner:
             supports_model_override=False,
             supports_usage_telemetry=False,
             supports_session_name=False,
+            custom_auth_check=_has_bob_auth,
         )
 
     def __init__(
