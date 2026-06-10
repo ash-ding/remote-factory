@@ -124,6 +124,23 @@ class TestReadConfig:
         assert config.goal == sample_config.goal
         assert config.eval_threshold == sample_config.eval_threshold
 
+    async def test_read_config_missing_file(self, store):
+        store.factory_dir.mkdir(parents=True, exist_ok=True)
+        with pytest.raises(FileNotFoundError, match="Run 'factory init'"):
+            await store.read_config()
+
+    async def test_read_config_invalid_json(self, store):
+        store.factory_dir.mkdir(parents=True, exist_ok=True)
+        (store.factory_dir / "config.json").write_text("{bad json")
+        with pytest.raises(ValueError, match="invalid JSON"):
+            await store.read_config()
+
+    async def test_read_config_invalid_schema(self, store):
+        store.factory_dir.mkdir(parents=True, exist_ok=True)
+        (store.factory_dir / "config.json").write_text('{"not_a_field": true}')
+        with pytest.raises(ValueError, match="failed validation"):
+            await store.read_config()
+
 
 class TestEvalProfile:
     async def test_save_and_read_profile(self, store, sample_config):
@@ -392,6 +409,299 @@ class TestReparseResearchTarget:
         store.factory_dir.mkdir(exist_ok=True)
         config = await store.reparse_config()
         assert config.research_target is None
+
+
+class TestTierWeightsParsing:
+    """Tests for parsing ## Hygiene Weights and ## Growth Weights from factory.md."""
+
+    async def test_parse_hygiene_weights(self, store):
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nTest project\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n- no deletes\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n- small changes\n\n"
+            "## Hygiene Weights\n"
+            "- tests: 0.40\n"
+            "- coverage: 0.30\n"
+            "- lint: 0.10\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.hygiene_weights is not None
+        assert config.hygiene_weights.tests == 0.40
+        assert config.hygiene_weights.coverage == 0.30
+        assert config.hygiene_weights.lint == 0.10
+        assert config.hygiene_weights.type_check is None
+
+    async def test_parse_growth_weights(self, store):
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nTest project\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n\n"
+            "## Growth Weights\n"
+            "- capability_surface: 0.30\n"
+            "- spec_compliance: 0.20\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.growth_weights is not None
+        assert config.growth_weights.capability_surface == 0.30
+        assert config.growth_weights.spec_compliance == 0.20
+        assert config.growth_weights.observability is None
+
+    async def test_both_tier_weights(self, store):
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nTest\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n\n"
+            "## Hygiene Weights\n"
+            "- tests: 0.50\n\n"
+            "## Growth Weights\n"
+            "- factory_effectiveness: 0.25\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.hygiene_weights is not None
+        assert config.hygiene_weights.tests == 0.50
+        assert config.growth_weights is not None
+        assert config.growth_weights.factory_effectiveness == 0.25
+
+    async def test_no_tier_weights_backward_compat(self, store):
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nNormal project\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n- no deletes\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n- small changes\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.hygiene_weights is None
+        assert config.growth_weights is None
+
+    async def test_invalid_dim_name_ignored(self, store):
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nTest\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n\n"
+            "## Hygiene Weights\n"
+            "- tests: 0.40\n"
+            "- nonexistent_dim: 0.99\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.hygiene_weights is not None
+        assert config.hygiene_weights.tests == 0.40
+
+    async def test_tier_weights_roundtrip_config_json(self, store, sample_config):
+        """TierWeights should survive write → read via config.json."""
+        from factory.models import TierWeights
+        config = sample_config.model_copy(update={
+            "hygiene_weights": TierWeights(tests=0.40, lint=0.20),
+        })
+        await store.init(config)
+        loaded = await store.read_config()
+        assert loaded.hygiene_weights is not None
+        assert loaded.hygiene_weights.tests == 0.40
+        assert loaded.hygiene_weights.lint == 0.20
+        assert loaded.hygiene_weights.coverage is None
+
+
+class TestParseInnerLoop:
+    """Tests for parsing ## Multi-Run section from factory.md."""
+
+    async def test_parse_inner_loop(self, store):
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nResearch\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n\n"
+            "## Multi-Run\n"
+            "- Runs per cycle: 5\n"
+            "- Aggregate: median\n"
+            "- Max inner runs per cycle: 10\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.inner_loop is not None
+        assert config.inner_loop.runs_per_cycle == 5
+        assert config.inner_loop.aggregate.value == "median"
+        assert config.inner_loop.max_inner_runs_per_cycle == 10
+
+    async def test_parse_inner_loop_defaults(self, store):
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nResearch\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n\n"
+            "## Multi-Run\n"
+            "- Runs per cycle: 3\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.inner_loop is not None
+        assert config.inner_loop.runs_per_cycle == 3
+        assert config.inner_loop.aggregate.value == "mean"  # default
+        assert config.inner_loop.max_inner_runs_per_cycle is None  # default
+
+    async def test_no_inner_loop_section(self, store):
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nNormal\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.inner_loop is None
+
+    async def test_inner_loop_all_pass(self, store):
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nResearch\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n\n"
+            "## Multi-Run\n"
+            "- Runs per cycle: 3\n"
+            "- Aggregate: all_pass\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.inner_loop is not None
+        assert config.inner_loop.aggregate.value == "all_pass"
+
+
+class TestParseOuterLoop:
+    """Tests for parsing ## Outer Loop Surfaces / ## Surface Scoping section from factory.md."""
+
+    async def test_parse_outer_loop(self, store):
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nResearch\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n\n"
+            "## Outer Loop Surfaces\n"
+            "- max_outer_cycles: 10\n"
+            "- inner: src/model.py\n"
+            "- inner: src/train.py\n"
+            "- outer: config/hyperparams.yaml\n"
+            "- outer: config/arch.yaml\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.outer_loop is not None
+        assert config.outer_loop.max_outer_cycles == 10
+        assert config.outer_loop.inner_surfaces == ["src/model.py", "src/train.py"]
+        assert config.outer_loop.outer_surfaces == ["config/hyperparams.yaml", "config/arch.yaml"]
+
+    async def test_no_outer_loop_section(self, store):
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nNormal\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.outer_loop is None
+
+    async def test_outer_loop_defaults(self, store):
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nResearch\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n\n"
+            "## Outer Loop Surfaces\n"
+            "- max_outer_cycles: 4\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.outer_loop is not None
+        assert config.outer_loop.max_outer_cycles == 4
+        assert config.outer_loop.inner_surfaces == []
+        assert config.outer_loop.outer_surfaces == []
+
+    async def test_surface_scoping_alias(self, store):
+        """## Surface Scoping is an alias for ## Outer Loop Surfaces."""
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nResearch\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n\n"
+            "## Surface Scoping\n"
+            "- inner: src/model.py\n"
+            "- outer: config/\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.outer_loop is not None
+        assert config.outer_loop.inner_surfaces == ["src/model.py"]
+        assert config.outer_loop.outer_surfaces == ["config/"]
+
+    async def test_both_loops_together(self, store):
+        factory_md = store.project_path / "factory.md"
+        factory_md.write_text(
+            "# Factory\n\n## Goal\nResearch\n\n"
+            "## Scope\n- src/\n\n"
+            "## Guards\n\n"
+            "## Eval\n```\npython eval.py\n```\n\n"
+            "## Threshold\n0.8\n\n"
+            "## Constraints\n\n"
+            "## Inner Loop\n"
+            "- runs_per_cycle: 3\n"
+            "- aggregate: mean\n\n"
+            "## Outer Loop Surfaces\n"
+            "- max_outer_cycles: 5\n"
+            "- inner: src/model.py\n"
+            "- outer: config/\n"
+        )
+        store.factory_dir.mkdir(exist_ok=True)
+        config = await store.reparse_config()
+        assert config.inner_loop is not None
+        assert config.inner_loop.runs_per_cycle == 3
+        assert config.outer_loop is not None
+        assert config.outer_loop.max_outer_cycles == 5
 
 
 class TestEnsureFactoryDir:

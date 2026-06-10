@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide follows the lifecycle of a Factory project — from a one-line idea through autonomous improvement and back to your steering wheel.
+This guide follows the lifecycle of a re:factory project — from a one-line idea through autonomous improvement and back to your steering wheel.
 
 ## Prerequisites
 
@@ -8,27 +8,27 @@ Make sure you've completed the [Setup](setup.md) steps:
 
 - Python 3.11+
 - Claude Code installed and authenticated
-- The Factory installed (`factory --help` should work)
+- re:factory installed (`factory --help` should work)
 
 ## The Lifecycle
 
-Every Factory project follows the same arc:
+Every re:factory project follows the same arc:
 
 ```
 Idea → Build → Backlog appears → Improve (auto / focus / prompt / issues) → Steer → Loop
 ```
 
-The Factory handles the transitions automatically. You decide when to intervene.
+re:factory handles the transitions automatically. You decide when to intervene.
 
 ---
 
 ## 1. Start from an Idea
 
-The Factory accepts three entry points depending on how far along your thinking is.
+re:factory accepts three entry points depending on how far along your thinking is.
 
 ### Build — you know what you want
 
-The simplest path. Describe what you want and the Factory handles everything else:
+The simplest path. Describe what you want and re:factory handles everything else:
 
 ```bash
 factory ceo "Build a CLI that converts CSV to JSON with streaming support"
@@ -70,7 +70,7 @@ Interactive mode runs a three-step loop before any code is written:
 2. **Distill** — the Distiller synthesizes the research into a structured spec (features, architecture, non-goals)
 3. **Iterate** — the CEO presents the draft to you for feedback. Revise until you approve.
 
-Once you sign off, the spec is persisted and the Factory proceeds to Build mode. Incompatible with `--headless` and `--focus`.
+Once you sign off, the spec is persisted and re:factory proceeds to Build mode. Incompatible with `--headless` and `--focus`.
 
 ### Research — you have a metric to optimize
 
@@ -87,7 +87,7 @@ Research ideation works like interactive mode but the Distiller collects additio
 - **Fixed Surfaces** — ground truth data and eval infrastructure that must never be touched
 - **Research Constraints** — additional rules (e.g., "do not use GPT-4 for cost reasons")
 
-Once you approve the spec, the Factory builds the project and transitions to the research improvement loop. See [Research Mode in Detail](#research-mode-in-detail) below.
+Once you approve the spec, re:factory builds the project and transitions to the research improvement loop. See [Research Mode in Detail](#research-mode-in-detail) below.
 
 ---
 
@@ -106,7 +106,7 @@ When Build completes, the project has code, tests, a `factory.md` configuration,
 
 ## 3. The Backlog Appears
 
-After the first build, the Factory creates `.factory/strategy/backlog.md` — a unified work queue that feeds all future improvement. The backlog accumulates items from several sources:
+After the first build, re:factory creates `.factory/strategy/backlog.md` — a unified work queue that feeds all future improvement. The backlog accumulates items from several sources:
 
 - Features deferred during initial build
 - Issues you file on GitHub
@@ -123,13 +123,13 @@ factory backlog-remove ~/my-project "old item"        # remove a completed item
 
 ## 4. Improve — The Core Loop
 
-Point the Factory at an existing codebase and it runs the improvement cycle:
+Point re:factory at an existing codebase and it runs the improvement cycle:
 
 ```bash
 factory ceo ~/my-project
 ```
 
-If the project already has a `.factory/` directory, the Factory resumes where it left off. If not, it runs discovery first — detecting the language, framework, and test setup — then starts improving.
+If the project already has a `.factory/` directory, re:factory resumes where it left off. If not, it runs discovery first — detecting the language, framework, and test setup — then starts improving.
 
 ### What happens in a cycle
 
@@ -145,9 +145,9 @@ Each cycle produces a numbered experiment directory under `.factory/experiments/
 
 ---
 
-## 5. Steering the Factory
+## 5. Steering re:factory
 
-The Factory runs autonomously, but you have four ways to steer it:
+re:factory runs autonomously, but you have four ways to steer it:
 
 ### `--focus` — build exactly one thing
 
@@ -183,6 +183,34 @@ Add items directly to the backlog for the next cycle to pick up:
 ```bash
 factory backlog-add ~/my-project "add structured logging"
 ```
+
+### `--refine` — targeted post-cycle changes
+
+After a cycle completes (or anytime on an existing project), request a single refinement:
+
+```bash
+factory ceo ~/my-project --refine "add rate limiting to the API"
+```
+
+This routes through the **Refiner** agent (scopes the change) → **Builder** (implements) → full review pipeline → keep/revert verdict. Mutually exclusive with `--mode`, `--prompt`, and `--focus`.
+
+### `--clean-pr` — strip artifacts for upstream
+
+When contributing factory-managed code to an external repository, use `--clean-pr` to strip eval scripts, benchmarks, `.factory/` data, and eval test files from the PR before pushing. The welcome wizard auto-suggests this flag when the input is a GitHub URL.
+
+```bash
+factory ceo https://github.com/user/repo --clean-pr
+factory clean-pr ~/my-project --exp 3
+```
+
+### Post-cycle refinement loop
+
+In foreground mode, the CEO doesn't exit after a cycle — it stays active and waits for follow-up requests. Just type what you want changed:
+
+> "Fix the typo in the header"
+> "Add error handling to the upload endpoint"
+
+Each request is a tracked experiment with its own PR, review pipeline, and keep/revert verdict. There's no cap on refinements — advisory warnings appear at 5 and 10 to flag context growth, but you decide when to stop. Say "done" or "looks good" to exit.
 
 ---
 
@@ -245,9 +273,22 @@ The research target is configured in `factory.md`:
 - eval/
 - data/ground_truth.json
 - tests/
+
+## Inner Loop
+- runs_per_cycle: 5
+- aggregate: mean
+- plateau_threshold: 3
+- max_inner_runs_per_cycle: 10
+
+## Outer Loop Surfaces
+- max_outer_cycles: 5
+- inner: prompts/*.md
+- outer: src/**/*.py
 ```
 
 **Mutable surfaces** are files the Builder can change. **Fixed surfaces** are ground truth data and eval infrastructure that must never be modified. Fixed surfaces are fingerprinted for leakage detection.
+
+**Inner Loop** is for stochastic harnesses — it runs the eval N times per cycle, aggregates via `mean`/`median`/`max`/`all_pass`, and detects plateau after N consecutive non-improving cycles. **Outer Loop Surfaces** defines narrow (inner) and wide (outer) scopes — when the inner loop plateaus, re:factory expands mutable surfaces to include outer surfaces for architectural changes. Both sections are optional and independent.
 
 ### The research cycle
 

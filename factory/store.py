@@ -10,8 +10,10 @@ from typing import Literal
 
 import structlog
 from filelock import FileLock
+from pydantic import ValidationError
 
 from factory.models import (
+    AggregateMethod,
     CompositeScore,
     CostBudgetConfig,
     EvalProfile,
@@ -20,8 +22,11 @@ from factory.models import (
     FactoryConfig,
     HardConstraint,
     HypothesisBudget,
+    InnerLoopConfig,
+    OuterLoopConfig,
     ProjectEvalDimension,
     ResearchTarget,
+    TierWeights,
 )
 
 log = structlog.get_logger()
@@ -130,6 +135,61 @@ def _parse_cost_budget(items: str | list[str] | float) -> CostBudgetConfig | Non
     return budget
 
 
+def _parse_inner_loop(items: str | list[str] | float) -> InnerLoopConfig | None:
+    """Parse inner loop key-value block from factory.md."""
+    kv = _parse_kv_list(items, str)
+    if not kv:
+        return None
+    config = InnerLoopConfig(
+        runs_per_cycle=int(str(kv.get("runs_per_cycle", "1"))),
+        aggregate=AggregateMethod(str(kv.get("aggregate", "mean"))),
+        plateau_threshold=int(str(kv.get("plateau_threshold", "3"))),
+        max_inner_runs_per_cycle=(
+            int(str(kv["max_inner_runs_per_cycle"]))
+            if "max_inner_runs_per_cycle" in kv
+            else None
+        ),
+    )
+    log.debug("inner_loop_parsed", runs_per_cycle=config.runs_per_cycle, aggregate=config.aggregate.value)
+    return config
+
+
+def _parse_outer_loop(items: str | list[str] | float) -> OuterLoopConfig | None:
+    """Parse outer loop surfaces key-value block from factory.md.
+
+    Supports both key-value pairs (max_outer_cycles) and plain list items
+    prefixed with 'inner:' or 'outer:' for surface declarations.
+    """
+    if not isinstance(items, list):
+        return None
+    max_outer_cycles: int | None = None
+    inner_surfaces: list[str] = []
+    outer_surfaces: list[str] = []
+    for item in items:
+        s = str(item).strip()
+        if s.startswith("max_outer_cycles:"):
+            val = s.split(":", 1)[1].strip()
+            max_outer_cycles = int(val) if val else None
+        elif s.startswith("inner:"):
+            inner_surfaces.append(s.split(":", 1)[1].strip())
+        elif s.startswith("outer:"):
+            outer_surfaces.append(s.split(":", 1)[1].strip())
+    if not inner_surfaces and not outer_surfaces and max_outer_cycles is None:
+        return None
+    config = OuterLoopConfig(
+        max_outer_cycles=max_outer_cycles,
+        inner_surfaces=inner_surfaces,
+        outer_surfaces=outer_surfaces,
+    )
+    log.debug(
+        "outer_loop_parsed",
+        max_outer_cycles=config.max_outer_cycles,
+        inner_count=len(config.inner_surfaces),
+        outer_count=len(config.outer_surfaces),
+    )
+    return config
+
+
 def _parse_hard_constraints(items: str | list[str] | float) -> list[HardConstraint]:
     """Parse hard constraint entries from factory.md.
 
@@ -156,6 +216,18 @@ def _parse_hard_constraints(items: str | list[str] | float) -> list[HardConstrai
             description=fields.get("description", ""),
         ))
     return constraints
+
+
+def _parse_tier_weights(items: str | list[str] | float) -> TierWeights | None:
+    """Parse within-tier weight overrides from factory.md."""
+    kv = _parse_kv_list(items, float)
+    if not kv:
+        return None
+    valid_fields = set(TierWeights.model_fields.keys())
+    filtered = {k: float(str(v)) for k, v in kv.items() if k in valid_fields}
+    if not filtered:
+        return None
+    return TierWeights(**filtered)
 
 
 class ExperimentStore:
@@ -204,6 +276,9 @@ class ExperimentStore:
             "threshold": "eval_threshold",
             "modifiable": "scope",
             "read_only": "read_only",
+            "multi-run": "inner_loop",
+            "multi_run": "inner_loop",
+            "surface_scoping": "outer_loop_surfaces",
         }
 
         def _flush_list() -> None:
@@ -258,6 +333,8 @@ class ExperimentStore:
         smoke_test = str(smoke_test_raw).strip() if smoke_test_raw else ""
 
         research_target = _parse_research_target(parsed.get("research_target", []))
+        inner_loop = _parse_inner_loop(parsed.get("inner_loop", []))
+        outer_loop = _parse_outer_loop(parsed.get("outer_loop_surfaces", []))
         cost_budget = _parse_cost_budget(parsed.get("cost_budget", []))
 
         mutable_raw = parsed.get("mutable_surfaces", [])
@@ -267,6 +344,17 @@ class ExperimentStore:
         rc_raw = parsed.get("research_constraints", [])
         research_constraints = list(rc_raw) if isinstance(rc_raw, list) else []
         hard_constraints = _parse_hard_constraints(parsed.get("hard_constraints", []))
+        es_raw = parsed.get("eval_spec", [])
+        eval_spec = list(es_raw) if isinstance(es_raw, list) else []
+        hygiene_tier_weights = _parse_tier_weights(parsed.get("hygiene_weights", []))
+        growth_tier_weights = _parse_tier_weights(parsed.get("growth_weights", []))
+
+        clean_pr_raw = parsed.get("clean_pr", "")
+        clean_pr = str(clean_pr_raw).strip().lower() in ("true", "yes", "1") if clean_pr_raw else False
+        clean_pr_include_raw = parsed.get("clean_pr_include", [])
+        clean_pr_include = list(clean_pr_include_raw) if isinstance(clean_pr_include_raw, list) else []
+        clean_pr_exclude_raw = parsed.get("clean_pr_exclude", [])
+        clean_pr_exclude = list(clean_pr_exclude_raw) if isinstance(clean_pr_exclude_raw, list) else []
 
         config = FactoryConfig(
             goal=str(parsed.get("goal", "")),
@@ -281,11 +369,19 @@ class ExperimentStore:
             project_eval=project_eval_dims,
             eval_weights=EvalWeights(**weights_kwargs) if weights_kwargs else EvalWeights(),  # type: ignore[arg-type]
             research_target=research_target,
+            inner_loop=inner_loop,
+            outer_loop=outer_loop,
             mutable_surfaces=mutable_surfaces,
             fixed_surfaces=fixed_surfaces,
             research_constraints=research_constraints,
             cost_budget=cost_budget,
             hard_constraints=hard_constraints,
+            eval_spec=eval_spec,
+            hygiene_weights=hygiene_tier_weights,
+            growth_weights=growth_tier_weights,
+            clean_pr=clean_pr,
+            clean_pr_include=clean_pr_include,
+            clean_pr_exclude=clean_pr_exclude,
         )
 
         (self.factory_dir / "config.json").write_text(
@@ -478,10 +574,26 @@ class ExperimentStore:
 
     async def read_config(self) -> FactoryConfig:
         """Read .factory/config.json and return a FactoryConfig."""
-        log.debug("read_config", path=str(self.factory_dir / "config.json"))
         config_path = self.factory_dir / "config.json"
-        data = json.loads(config_path.read_text())
-        return FactoryConfig(**data)
+        log.debug("read_config", path=str(config_path))
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"{config_path} not found. Run 'factory init' first to create it from factory.md."
+            )
+        try:
+            data = json.loads(config_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"{config_path} contains invalid JSON: {exc}. "
+                "Run 'factory init --reparse' to regenerate it from factory.md."
+            ) from exc
+        try:
+            return FactoryConfig.model_validate(data, strict=False)  # strict=False needed to coerce enum strings from JSON (e.g. AggregateMethod)
+        except (ValidationError, TypeError, KeyError) as exc:
+            raise ValueError(
+                f"{config_path} failed validation: {exc}. "
+                "Run 'factory init --reparse' to regenerate it from factory.md."
+            ) from exc
 
     async def save_eval_profile(self, profile: EvalProfile) -> None:
         """Write .factory/eval_profile.json."""

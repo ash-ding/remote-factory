@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Each Factory-managed project uses a `factory.md` file at its root. The CEO auto-generates this during discovery mode, but you can edit it manually.
+Each re:factory-managed project uses a `factory.md` file at its root. The CEO auto-generates this during discovery mode, but you can edit it manually.
 
 ## Minimal Configuration
 
@@ -33,7 +33,7 @@ What the project should achieve. One sentence that guides the Strategist's hypot
 
 ### `## Scope / Modifiable` (required)
 
-Glob patterns defining which files the factory may edit. Anything outside scope triggers a guard violation.
+Glob patterns defining which files re:factory may edit. Anything outside scope triggers a guard violation.
 
 ```markdown
 ## Scope
@@ -136,6 +136,27 @@ curl -sf http://localhost:8000/health
 
 Good smoke tests are fast (under 30s), test the core user flow, and catch integration issues that unit tests miss.
 
+### `## Clean PR`
+
+Strips non-essential artifacts (eval scripts, benchmarks, `.factory/` data, eval test files) from PRs before pushing to external repositories. Useful when contributing factory-managed code to upstream repos that don't want factory infrastructure.
+
+```markdown
+## Clean PR
+- clean_pr: true
+- clean_pr_include: ["src/**", "lib/**"]
+- clean_pr_exclude: ["src/internal/**"]
+```
+
+| Field | Purpose | Default |
+|-------|---------|---------|
+| `clean_pr` | Enable clean PR mode | `false` |
+| `clean_pr_include` | Include-only glob patterns — if set, only matching files survive | `[]` |
+| `clean_pr_exclude` | Additional exclude patterns beyond defaults | `[]` |
+
+Default excludes (always applied): `eval/score.py`, `benchmarks/**`, `tests/eval_*`, `.factory/**`. A file matched by both include and exclude is excluded (exclude wins).
+
+Resolution precedence: CLI flag (`--clean-pr` / `--no-clean-pr`) > `config.json` > default (`false`).
+
 ### `## Constraints`
 
 Soft rules that guide behavior but don't block merges:
@@ -202,6 +223,46 @@ Additional rules for the research loop. Only used in research mode.
 - Each experiment must complete within 30 minutes
 ```
 
+### `## Inner Loop`
+
+Multi-run configuration for research mode. Runs the evaluation harness multiple times per cycle and aggregates the metric. Useful for stochastic pipelines where a single run doesn't give a reliable signal. Only used in research mode.
+
+```markdown
+## Inner Loop
+- runs_per_cycle: 5
+- aggregate: mean
+- plateau_threshold: 3
+- max_inner_runs_per_cycle: 10
+```
+
+| Field | Purpose | Default |
+|-------|---------|---------|
+| `runs_per_cycle` | Number of times to run the harness per cycle | `1` |
+| `aggregate` | How to combine scores: `mean`, `median`, `max`, `all_pass` | `mean` |
+| `plateau_threshold` | Consecutive non-improving cycles before triggering outer loop | `3` |
+| `max_inner_runs_per_cycle` | Optional cap on runs per cycle | None |
+
+### `## Outer Loop Surfaces`
+
+Surface scoping for inner/outer loop transitions. When inner loop improvements plateau, re:factory expands the Builder's scope to include outer surfaces for architectural changes. Only used in research mode.
+
+```markdown
+## Outer Loop Surfaces
+- max_outer_cycles: 5
+- inner: prompts/*.md
+- inner: config/*.yaml
+- outer: src/**/*.py
+- outer: agents/**/*.md
+```
+
+| Field | Purpose |
+|-------|---------|
+| `max_outer_cycles` | Maximum outer loop expansions before stopping |
+| `inner: <glob>` | Narrow surfaces used during inner loop (one per line) |
+| `outer: <glob>` | Additional surfaces unlocked after plateau (one per line) |
+
+Entries use prefix format — `inner:` and `outer:` followed by a glob pattern. Multiple entries per type are allowed.
+
 ### `## Cost Budget`
 
 Per-cycle or total budget constraints for research experiments.
@@ -213,7 +274,7 @@ $5/cycle, $50 total
 
 ## `.factory/` Directory
 
-Generated at runtime by the factory. Add to `.gitignore` — do not edit manually:
+Generated at runtime by re:factory. Add to `.gitignore` — do not edit manually:
 
 ```
 .factory/

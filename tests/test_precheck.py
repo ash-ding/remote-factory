@@ -443,7 +443,7 @@ class TestFormatReview:
         assert "❌" in body
         assert "FAIL" in body
 
-    def test_no_scores(self):
+    def test_no_scores_omits_score_section(self):
         payload = ReviewPayload(
             verdict="REVERT",
             reason="Missing scores",
@@ -455,6 +455,21 @@ class TestFormatReview:
             code_notes=[],
         )
         body = format_review(payload)
+        assert "Score Comparison" not in body
+
+    def test_one_score_present_shows_section(self):
+        payload = ReviewPayload(
+            verdict="KEEP",
+            reason="Partial scores",
+            score_before=0.8,
+            score_after=None,
+            threshold=0.8,
+            guard_results={},
+            precheck_summary="",
+            code_notes=[],
+        )
+        body = format_review(payload)
+        assert "Score Comparison" in body
         assert "n/a" in body
 
     def test_minimal_payload(self):
@@ -501,9 +516,21 @@ class TestPostReview:
         assert "owner/repo" in call_args
 
     @patch("factory.review.subprocess.run")
-    def test_failure(self, mock_run):
+    def test_review_fails_falls_back_to_comment(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=1, stderr="auth error"),
+            MagicMock(returncode=0),
+        ]
+        assert post_review(42, "body", "KEEP") is True
+        assert mock_run.call_count == 2
+        fallback_cmd = mock_run.call_args_list[1][0][0]
+        assert fallback_cmd[:3] == ["gh", "pr", "comment"]
+
+    @patch("factory.review.subprocess.run")
+    def test_review_and_comment_both_fail(self, mock_run):
         mock_run.return_value = MagicMock(returncode=1, stderr="auth error")
         assert post_review(42, "body", "KEEP") is False
+        assert mock_run.call_count == 2
 
     @patch("factory.review.subprocess.run")
     def test_timeout(self, mock_run):

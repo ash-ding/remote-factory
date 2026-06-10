@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 AgentRole = Literal[
     "researcher", "strategist", "builder", "reviewer", "evaluator",
-    "archivist", "distiller", "ceo", "failure_analyst",
+    "archivist", "distiller", "ceo", "failure_analyst", "refiner", "profiler",
 ]
 
 # Consecutive failure tracking
@@ -45,16 +45,34 @@ def reset_failure_counter() -> None:
     global _consecutive_failures
     _consecutive_failures = 0
 
+IDENTITY_REANCHOR = """\
+
+---
+
+> **⚠ CEO IDENTITY RE-ANCHOR (Sacred Rule 8)**
+> You are the Factory CEO. You orchestrate, delegate, and decide. You do NOT implement.
+> If you are about to write code, run tests, do research, or fix bugs — STOP and spawn the appropriate agent.
+> Re-read your Permitted/Forbidden Actions lists in the Identity section above.
+"""
+
 # Directory containing base agent prompts (shipped with the factory)
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
-def resolve_prompt(role: AgentRole, project_path: Path | None = None) -> str:
+def resolve_prompt(
+    role: AgentRole,
+    project_path: Path | None = None,
+    *,
+    use_profile: bool = False,
+) -> str:
     """Resolve the prompt for an agent role.
 
     Resolution order:
     1. Project-specific override: <project>/.factory/agents/<role>.md
     2. Factory default: factory/agents/prompts/<role>.md
+
+    When *use_profile* is True, loads ~/.factory/profile.md and appends it
+    after the ACE playbook injection.
 
     Returns the prompt content as a string.
     """
@@ -69,6 +87,8 @@ def resolve_prompt(role: AgentRole, project_path: Path | None = None) -> str:
             if playbook:
                 prompt = inject_playbook(prompt, playbook)
                 logger.info("Injected playbook for %s (project override)", role)
+            if use_profile:
+                prompt = _maybe_inject_profile(prompt, role)
             return prompt
 
     # Fall back to factory default
@@ -88,6 +108,20 @@ def resolve_prompt(role: AgentRole, project_path: Path | None = None) -> str:
         prompt = inject_playbook(prompt, playbook)
         logger.info("Injected playbook for %s", role)
 
+    if use_profile:
+        prompt = _maybe_inject_profile(prompt, role)
+
+    return prompt
+
+
+def _maybe_inject_profile(prompt: str, role: str) -> str:
+    """Load and inject user profile if it exists."""
+    from factory.profile import inject_profile, load_profile
+
+    profile = load_profile()
+    if profile:
+        prompt = inject_profile(prompt, profile)
+        logger.info("Injected user profile for %s", role)
     return prompt
 
 
@@ -101,6 +135,9 @@ async def invoke_agent(
     model: str | None = None,
     runner_name: str | None = None,
     _track_failures: bool = True,
+    session_name: str | None = None,
+    use_profile: bool = False,
+    tmux_persist: bool = False,
 ) -> tuple[str, int]:
     """Invoke a Claude Code agent with the resolved prompt + task.
 
@@ -114,6 +151,10 @@ async def invoke_agent(
         runner_name: CLI backend to use ("claude" or "bob"). Defaults to FACTORY_RUNNER env var.
         _track_failures: If True (default), track consecutive failures globally.
             Set to False when called from invoke_agents_parallel to avoid race conditions.
+        session_name: Optional session name for /resume identification.
+            If not provided, defaults to "factory: {project_name}/{role}".
+        use_profile: If True, inject user profile into the agent prompt.
+        tmux_persist: If True, run the agent interactively in a tmux window.
 
     Returns (stdout, return_code).
 
@@ -123,7 +164,7 @@ async def invoke_agent(
     """
     global _consecutive_failures
 
-    prompt = resolve_prompt(role, project_path)
+    prompt = resolve_prompt(role, project_path, use_profile=use_profile)
 
     logger.info("Invoking %s agent for %s", role, project_path.name)
 
@@ -131,16 +172,28 @@ async def invoke_agent(
 
     runner = get_runner(runner_name, project_path=project_path)
 
+    agent_session_name = session_name or f"factory: {project_path.resolve().name}/{role}"
+
+    from factory.models import AgentRunRequest
+
+    request = AgentRunRequest(
+        prompt=prompt,
+        task=task,
+        cwd=project_path,
+        timeout=timeout,
+        model=model,
+        skip_permissions=dangerously_skip_permissions,
+        role=role,
+        session_name=agent_session_name,
+        project_path=project_path,
+        extras={"tmux_persist": tmux_persist},
+    )
+
     try:
-        stdout, return_code = await runner.headless(
-            prompt=prompt,
-            task=task,
-            cwd=project_path,
-            timeout=timeout,
-            model=model,
-            dangerously_skip_permissions=dangerously_skip_permissions,
-            role=role,
-        )
+        result = await runner.headless(request)
+        stdout = result.stdout
+        return_code = result.return_code
+        usage = result.usage
     except Exception as e:
         logger.error("%s agent failed: %s", role, e)
         _emit_safe(project_path, "agent.failed", agent=role, data={"error": str(e)[:200]})
@@ -159,12 +212,21 @@ async def invoke_agent(
             _consecutive_failures += 1
             _check_failure_threshold(project_path, role)
     else:
+        completed_data: dict[str, object] = {"return_code": 0}
+        if usage is not None:
+            completed_data.update({
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "cache_read_tokens": usage.cache_read_tokens,
+                "total_cost_usd": usage.total_cost_usd,
+                "duration_ms": usage.duration_ms,
+                "num_turns": usage.num_turns,
+            })
         _emit_safe(
             project_path, "agent.completed", agent=role,
-            data={"return_code": 0},
+            data=completed_data,
         )
         if _track_failures:
-            # Reset counter on success
             _consecutive_failures = 0
 
     _save_review(project_path, role, stdout, return_code)
@@ -214,7 +276,10 @@ def _save_review(project_path: Path, role: str, output: str, return_code: int) -
 
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         header = f"# {role.title()} Agent Output\n\n- **timestamp:** {ts}\n- **exit_code:** {return_code}\n\n---\n\n"
-        review_path.write_text(header + output)
+        content = header + output
+        if role != "ceo":
+            content += IDENTITY_REANCHOR
+        review_path.write_text(content)
         logger.debug("Saved review output for %s to %s", role, review_path)
     except Exception:
         logger.debug("Failed to save review for %s", role, exc_info=True)
@@ -228,6 +293,7 @@ async def invoke_agents_parallel(
     dangerously_skip_permissions: bool = True,
     model: str | None = None,
     runner_name: str | None = None,
+    tmux_persist: bool = False,
 ) -> list[tuple[str, int]]:
     """Invoke multiple agents concurrently. Returns list of (output, return_code).
 
@@ -245,6 +311,7 @@ async def invoke_agents_parallel(
             model=model,
             runner_name=runner_name,
             _track_failures=False,  # Avoid race condition; track locally below
+            tmux_persist=tmux_persist,
         )
         for role, task in tasks
     ]

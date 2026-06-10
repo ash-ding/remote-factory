@@ -163,6 +163,7 @@ def test_format_full(sample_state: CheckpointState) -> None:
     assert "Add checkpoint serialization" in output
     assert "tests=0.950" in output
     assert "lint=1.000" in output
+    assert "Loop level:    inner" in output
     assert "2026-04-20T12:00:00" in output
 
 

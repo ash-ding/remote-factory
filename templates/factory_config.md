@@ -75,6 +75,24 @@ main
 - project: 0.50
 -->
 
+## Hygiene Weights
+<!-- Within-tier weight overrides for hygiene dimensions. -->
+<!-- Only specify dimensions you want to change — unset dimensions keep defaults. -->
+<!-- Weights are normalized within the tier, so they don't need to sum to 1.0. -->
+<!-- Example:
+- tests: 0.40
+- coverage: 0.30
+- lint: 0.10
+-->
+
+## Growth Weights
+<!-- Within-tier weight overrides for growth dimensions. -->
+<!-- Only specify dimensions you want to change — unset dimensions keep defaults. -->
+<!-- Example:
+- capability_surface: 0.30
+- spec_compliance: 0.20
+-->
+
 ## Smoke Test
 <!-- Optional shell command that must pass before any change is kept. -->
 <!-- If configured, this runs as part of `factory precheck` — failure = mandatory revert. -->
@@ -83,6 +101,16 @@ main
 ```bash
 curl -sf http://localhost:8000/health
 ```
+-->
+
+## Eval Spec
+<!-- Testing instructions injected into the Evaluator's context. -->
+<!-- Each item describes a qualitative check the Evaluator should perform. -->
+<!-- Spec compliance is advisory — it does NOT affect the composite score. -->
+<!-- Example:
+- Run the CLI with --help and verify it prints usage info
+- Start the dev server and confirm the landing page loads
+- Verify the API returns JSON with the expected schema
 -->
 
 ## Constraints
@@ -129,6 +157,29 @@ curl -sf http://localhost:8000/health
 - Each experiment must complete within 30 minutes
 -->
 
+## Inner Loop
+<!-- Multi-run configuration for research mode. Runs the harness N times per cycle -->
+<!-- and aggregates the metric. Useful for stochastic pipelines. -->
+<!-- Example:
+- runs_per_cycle: 5
+- aggregate: mean
+- plateau_threshold: 3
+- max_inner_runs_per_cycle: 10
+-->
+
+## Outer Loop Surfaces
+<!-- Surface scoping for inner/outer loop transitions. -->
+<!-- When the inner loop plateaus, the factory expands to outer surfaces. -->
+<!-- Prefix each entry with 'inner:' or 'outer:' to declare which loop it belongs to. -->
+<!-- Example:
+- max_outer_cycles: 5
+- inner: prompts/*.md
+- inner: config/*.yaml
+- outer: src/**/*.py
+- outer: agents/**/*.md
+-->
+
 ## Cost Budget
 <!-- Per-cycle or total budget constraints for research experiments. -->
 <!-- Example: $5/cycle, $50 total -->
+

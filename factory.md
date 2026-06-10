@@ -21,9 +21,17 @@ Domain-agnostic multi-agent software evolution loop that can auto-discover evals
 - templates/**
 - README.md
 - docs/**
+- .github/workflows/*.yml
+- factory.md
 - CLAUDE.md
 - README.md
 - pyproject.toml
+- .agents/**
+- .codex-plugin/**
+- AGENTS.md
+- scripts/**
+- eval/**
+- factory.md
 
 ### Read-only
 <!-- Files the factory may read but must never modify. -->
@@ -49,7 +57,7 @@ python eval/score.py
 ### Threshold
 <!-- Minimum composite score (0.0-1.0) required to keep a change. -->
 
-0.8
+0.6
 
 ## Target Branch
 
@@ -64,17 +72,16 @@ main
 
 ## Hypothesis Budget
 <!-- Controls how many hypotheses the Strategist generates per cycle. -->
-<!-- These are defaults — override per-run with --min-growth, --min-fix, --max-total -->
+<!-- These are defaults — override per-run with --min-growth, --max-new -->
 
 - min_growth: 2
-- min_fix: 0
-- max_total: 7
+- max_new: 2
 
 ## Smoke Test
 <!-- Optional e2e smoke test command. Failure = mandatory revert. -->
 
 ```bash
-pytest tests/test_models.py tests/test_guards.py tests/test_cli.py -x -q --tb=short
+uv run pytest tests/test_models.py tests/test_guards.py tests/test_runners.py -x -q --tb=short
 ```
 
 ## Constraints

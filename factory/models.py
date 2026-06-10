@@ -7,7 +7,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ── project state ─────────────────────────────────────────────────
@@ -86,6 +86,43 @@ class ResearchTarget(BaseModel):
     timeout: int = 3600
 
 
+class AggregateMethod(str, Enum):
+    """How to aggregate multiple run metrics into a single value."""
+
+    mean = "mean"
+    median = "median"
+    max = "max"
+    all_pass = "all_pass"
+
+
+class InnerLoopConfig(BaseModel):
+    """Inner loop configuration — controls multi-run execution per cycle."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    runs_per_cycle: int = Field(ge=1, default=1)
+    aggregate: AggregateMethod = AggregateMethod.mean
+    plateau_threshold: int = 3
+    max_inner_runs_per_cycle: int | None = None
+
+    @field_validator("aggregate", mode="before")
+    @classmethod
+    def _coerce_aggregate(cls, v: object) -> AggregateMethod:
+        if isinstance(v, str):
+            return AggregateMethod(v)
+        return v  # type: ignore[return-value]
+
+
+class OuterLoopConfig(BaseModel):
+    """Outer loop configuration — controls what happens when inner loop plateaus."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    max_outer_cycles: int | None = None
+    inner_surfaces: list[str] = []
+    outer_surfaces: list[str] = []
+
+
 class CostBudgetConfig(BaseModel):
     """Per-project cost budget limits for research mode."""
 
@@ -121,6 +158,28 @@ class ResultParseError(Exception):
     """Raised when a result file cannot be parsed to extract the target metric."""
 
 
+class TierWeights(BaseModel):
+    """Sparse within-tier weight overrides for hygiene or growth dimensions.
+
+    Only set the dimensions you want to override — unset fields (None) keep defaults.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    tests: float | None = None
+    lint: float | None = None
+    type_check: float | None = None
+    coverage: float | None = None
+    guard_patterns: float | None = None
+    config_parser: float | None = None
+    capability_surface: float | None = None
+    experiment_diversity: float | None = None
+    observability: float | None = None
+    research_grounding: float | None = None
+    factory_effectiveness: float | None = None
+    spec_compliance: float | None = None
+
+
 class FactoryConfig(BaseModel):
     """Machine-readable config stored at .factory/config.json."""
 
@@ -138,11 +197,19 @@ class FactoryConfig(BaseModel):
     project_eval: list[ProjectEvalDimension] = []
     eval_weights: EvalWeights = EvalWeights()
     research_target: ResearchTarget | None = None
+    inner_loop: InnerLoopConfig | None = None
+    outer_loop: OuterLoopConfig | None = None
     mutable_surfaces: list[str] = []
     fixed_surfaces: list[str] = []
     research_constraints: list[str] = []
     cost_budget: CostBudgetConfig | None = None
     hard_constraints: list[HardConstraint] = []
+    eval_spec: list[str] = []
+    hygiene_weights: TierWeights | None = None
+    growth_weights: TierWeights | None = None
+    clean_pr: bool = False
+    clean_pr_include: list[str] = []
+    clean_pr_exclude: list[str] = []
 
 
 # ── eval ──────────────────────────────────────────────────────────
@@ -318,6 +385,24 @@ class CrossProjectInsights(BaseModel):
     generated_at: datetime
 
 
+# ── agent usage / token profiling ─────────────────────────────────
+
+
+class AgentUsage(BaseModel):
+    """Token usage data from a single agent invocation."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    total_cost_usd: float = 0.0
+    duration_ms: float = 0.0
+    num_turns: int = 0
+    model: str = ""
+
+
 # ── cost tracking ─────────────────────────────────────────────────
 
 
@@ -368,7 +453,7 @@ class CycleState(BaseModel):
 
     cycle_id: str
     started_at: datetime
-    mode: Literal["build", "discover", "improve", "meta", "research"]
+    mode: Literal["build", "discover", "improve", "meta", "research", "review"]
     initial_prompt: str = ""
     respawns: int = 0
     runner_name: str | None = None
@@ -454,3 +539,57 @@ class Notifier(Protocol):
         records: list[ExperimentRecord],
         composite: CompositeScore | None,
     ) -> None: ...
+
+
+# ── refinement state ─────────────────────────────────────────────
+
+
+class RefinementEntry(BaseModel):
+    """One refinement in a post-cycle refinement session."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    sequence: int
+    request: str
+    started_at: str
+    completed_at: str | None = None
+    verdict: str | None = None
+
+
+class RefinementState(BaseModel):
+    """Tracks refinements within a single post-cycle session."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    entries: list[RefinementEntry] = []
+
+
+# ── runner v2 ────────────────────────────────────────────────────
+
+
+class AgentRunRequest(BaseModel):
+    """Structured input for a runner invocation."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    prompt: str
+    task: str
+    cwd: Path
+    timeout: float = 600.0
+    model: str | None = None
+    skip_permissions: bool = True
+    role: str = "unknown"
+    session_name: str | None = None
+    project_path: Path | None = None
+    extras: dict[str, object] = {}
+
+
+class AgentRunResult(BaseModel):
+    """Structured output from a runner invocation."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    stdout: str
+    return_code: int
+    usage: AgentUsage | None = None
+    metadata: dict[str, object] = {}
