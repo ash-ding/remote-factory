@@ -103,6 +103,8 @@ tail -f some-log-file                      # Polling (doesn't work)
 
 Spawning subagents in the background and polling for output is not supported and doubles token/coin spend on every retry. Trust the runner — it captures everything.
 
+**Exception — Parallel Researcher spawning:** The Researcher agent is the one role where parallel spawning via shell backgrounding (`&`) + `wait` is explicitly allowed. This is because research tasks are embarrassingly parallel (local analysis, web search, and context reading are independent). Each parallel researcher MUST use `--review-tag` to produce distinct output files (e.g. `researcher-local-latest.md`, `researcher-external-latest.md`). After `wait`, read ALL tagged review files. This pattern does NOT apply to any other agent role.
+
 | Role       | Purpose                                                        |
 |------------|----------------------------------------------------------------|
 | Researcher | Observe: local analysis (`factory study`) + web research + archive synthesis |
@@ -144,7 +146,7 @@ You are NOT a passive pipeline. After EVERY agent completes, you MUST review its
 **Review protocol (apply after every agent):**
 
 1. **Read** the agent's output file: `cat $PROJECT_PATH/.factory/reviews/<role>-latest.md`
-2. **Read** any artifacts the agent produced (e.g., `.factory/strategy/research.md`, `.factory/strategy/current.md`, PR diff)
+2. **Read** any artifacts the agent produced (e.g., `.factory/strategy/research-*.md` tagged files, `.factory/strategy/current.md`, PR diff)
 3. **Assess** against the criteria below
 4. **Write** your verdict to `.factory/reviews/ceo-verdict-<role>.md`:
    ```markdown
@@ -339,25 +341,52 @@ Tell the user you're researching the space, then spawn the Researcher.
 
 **For new ideas:**
 
+Spawn 3 focused researchers in parallel:
+
 ```bash
-factory agent researcher --task "Mode 2 research for a new project idea.
+factory agent researcher --review-tag similar --task "Similar projects research for a new idea.
 
 The user wants to build: <RAW_IDEA>
 
 Research:
 1. Search the web for similar projects, existing solutions, and prior art
-2. Identify the best technology stack for this type of project
-3. Find architecture patterns and best practices
-4. Identify potential pitfalls and common mistakes
-5. Check .factory/archive/ for prior knowledge on similar builds
+2. Analyze their strengths, weaknesses, and market positioning
+3. Check .factory/archive/ for prior knowledge on similar builds
 
-Write a thorough research report to .factory/strategy/research.md covering:
+Write findings to .factory/strategy/research-similar.md covering:
 - Similar projects found (with links)
+- What they do well and what's missing
+- Differentiation opportunities
+" --project "$PROJECT_PATH" --timeout 600 &
+factory agent researcher --review-tag techstack --task "Tech stack research for a new idea.
+
+The user wants to build: <RAW_IDEA>
+
+Research:
+1. Identify the best technology stack for this type of project
+2. Find architecture patterns and best practices
+3. Evaluate framework/library options with trade-offs
+
+Write findings to .factory/strategy/research-techstack.md covering:
 - Recommended tech stack with rationale
 - Architecture patterns that fit
+- Framework comparisons
+" --project "$PROJECT_PATH" --timeout 600 &
+factory agent researcher --review-tag pitfalls --task "Pitfalls and scope research for a new idea.
+
+The user wants to build: <RAW_IDEA>
+
+Research:
+1. Identify potential pitfalls and common mistakes for this type of project
+2. Research MVP scope best practices
+3. Check .factory/archive/ for lessons from past builds
+
+Write findings to .factory/strategy/research-pitfalls.md covering:
 - Potential pitfalls to avoid
 - MVP scope recommendation
-" --project "$PROJECT_PATH" --timeout 600
+- Lessons from similar past builds
+" --project "$PROJECT_PATH" --timeout 600 &
+wait
 ```
 
 **For existing projects** (task includes `existing_project: true`):
@@ -369,37 +398,62 @@ First, gather local project context before spawning the Researcher:
 3. Run current eval: `factory eval "$PROJECT_PATH"` — where are the weak dimensions?
 4. Check open issues: `gh issue list --state open --json number,title,labels` (if GitHub is available)
 
-Then spawn the Researcher with combined local + external research:
+Then spawn 3 focused researchers in parallel:
 
 ```bash
-factory agent researcher --task "Mode 2 research for an existing project improvement.
+factory agent researcher --review-tag health --task "Project health analysis for an existing project.
 
 Project: $PROJECT_PATH
 <If focus topic provided: Focus topic: <FOCUS_TOPIC>>
 
-The project already exists and has a factory setup. Research:
-1. Study the local project: run 'factory study $PROJECT_PATH', read backlog at .factory/strategy/backlog.md, read eval scores, read recent experiment history via 'factory history $PROJECT_PATH'
-2. Analyze the codebase for weak areas and improvement opportunities
-3. Search the web for best practices related to the project's weak dimensions
-4. Check .factory/archive/ for prior knowledge and recurring patterns
-5. If a focus topic was provided, do deep research on that specific area
+Research:
+1. Run 'factory study $PROJECT_PATH' and read eval scores
+2. Read recent experiment history via 'factory history $PROJECT_PATH'
+3. Analyze the codebase for weak areas and improvement opportunities
 
-Write a thorough research report to .factory/strategy/research.md covering:
+Write findings to .factory/strategy/research-health.md covering:
 - Project health summary (eval scores, recent outcomes)
 - Weak dimensions and improvement opportunities
+" --project "$PROJECT_PATH" --timeout 600 &
+factory agent researcher --review-tag practices --task "Best practices research for an existing project.
+
+Project: $PROJECT_PATH
+<If focus topic provided: Focus topic: <FOCUS_TOPIC>>
+
+Research:
+1. Search the web for best practices related to the project's weak dimensions
+2. If a focus topic was provided, do deep research on that specific area
+3. Find ecosystem tools and patterns that could help
+
+Write findings to .factory/strategy/research-practices.md covering:
 - External best practices relevant to weak areas
+- Ecosystem tools and patterns
+" --project "$PROJECT_PATH" --timeout 600 &
+factory agent researcher --review-tag backlog --task "Backlog and context analysis for an existing project.
+
+Project: $PROJECT_PATH
+<If focus topic provided: Focus topic: <FOCUS_TOPIC>>
+
+Research:
+1. Read backlog at .factory/strategy/backlog.md
+2. Check .factory/archive/ for prior knowledge and recurring patterns
+3. Read open issues and cross-project insights
+
+Write findings to .factory/strategy/research-backlog.md covering:
 - Backlog items with context and prioritization advice
+- Prior knowledge and recurring patterns
 - Recommendations for what to work on next
-" --project "$PROJECT_PATH" --timeout 600
+" --project "$PROJECT_PATH" --timeout 600 &
+wait
 ```
 
 ### I0r: CEO Review — Research
 
 Apply the standard CEO Review Gate:
-1. Read `.factory/reviews/researcher-latest.md` and `.factory/strategy/research.md`
+1. Read all tagged review files (e.g. `.factory/reviews/researcher-similar-latest.md`, `.factory/reviews/researcher-techstack-latest.md`, `.factory/reviews/researcher-pitfalls-latest.md` for new ideas; or `researcher-health-latest.md`, `researcher-practices-latest.md`, `researcher-backlog-latest.md` for existing projects) and the corresponding `.factory/strategy/research-*.md` outputs
 2. Is the research relevant to the user's idea? Does it cover the technology landscape adequately?
 3. Write verdict to `.factory/reviews/ceo-verdict-researcher.md`
-4. If REDIRECT: re-invoke the Researcher with specific gaps
+4. If REDIRECT: re-invoke individual researchers (by tag) with specific gaps
 5. If PROCEED: continue to I1
 
 ### I1: Distill (Distiller Agent)
@@ -413,7 +467,7 @@ factory agent distiller --task "Distill a project specification from research an
 
 Raw idea: <RAW_IDEA>
 
-MANDATORY: Read .factory/strategy/research.md FIRST. Extract specific findings before writing any spec content.
+MANDATORY: Read ALL tagged research files FIRST (.factory/strategy/research-similar.md, research-techstack.md, research-pitfalls.md). Extract specific findings before writing any spec content.
 
 Every Core Feature MUST have at least 3 sentences covering What (user-visible behavior), How (implementation approach), and Why (research-grounded rationale). A bulleted list of one-liners is NOT a spec.
 
@@ -428,7 +482,7 @@ factory agent distiller --task "Distill an improvement specification for an exis
 Project: $PROJECT_PATH
 <If focus topic provided: Focus topic: <FOCUS_TOPIC>>
 
-MANDATORY: Read .factory/strategy/research.md FIRST. Extract specific findings before writing any spec content.
+MANDATORY: Read ALL tagged research files FIRST (.factory/strategy/research-health.md, research-practices.md, research-backlog.md). Extract specific findings before writing any spec content.
 
 Every Core Feature or Proposed Change MUST have at least 3 sentences covering What (user-visible behavior), How (implementation approach), and Why (research-grounded rationale). A bulleted list of one-liners is NOT a spec.
 
@@ -465,7 +519,7 @@ include the Multi-Run section. If the project has a two-tier surface structure
 (narrow surfaces to try first, wider surfaces to unlock after plateau), include
 the Surface Scoping section.
 
-MANDATORY: Read .factory/strategy/research.md FIRST. Extract specific findings before writing any spec content.
+MANDATORY: Read ALL tagged research files FIRST (.factory/strategy/research-similar.md, research-techstack.md, research-pitfalls.md). Extract specific findings before writing any spec content.
 
 Every Core Feature MUST have at least 3 sentences covering What (user-visible behavior), How (implementation approach), and Why (research-grounded rationale). A bulleted list of one-liners is NOT a spec.
 
@@ -484,7 +538,7 @@ Read `.factory/reviews/distiller-latest.md` and assess the draft:
 
 1. **Depth check:** Read each Core Feature entry. Every feature MUST have 3+ sentences across its What/How/Why sub-fields. If any feature is a one-liner without the structured sub-fields, REDIRECT with: "Feature '<name>' is a one-liner — expand to What/How/Why with 3+ sentences total."
 
-2. **Research grounding check:** Architecture decisions and feature rationale must reference specific findings from `.factory/strategy/research.md`. If the spec contains no citations or rationale grounded in research, REDIRECT with: "No research grounding found — architecture decisions must cite findings from research.md."
+2. **Research grounding check:** Architecture decisions and feature rationale must reference specific findings from the tagged research files (`.factory/strategy/research-*.md`). If the spec contains no citations or rationale grounded in research, REDIRECT with: "No research grounding found — architecture decisions must cite findings from research files."
 
 3. **Buildability check:** For each Core Feature, ask: could a Builder agent implement this feature from the spec alone, without asking clarifying questions? If any feature is too vague to implement (missing key details like data format, API shape, error handling approach), REDIRECT with: "Feature '<name>' is not buildable — a Builder would need to ask clarifying questions. Add implementation details."
 
@@ -536,7 +590,7 @@ The user wants to modify the project spec. Their feedback: <USER_FEEDBACK>
 Research specifically:
 - <targeted topic from feedback>
 
-Append findings to .factory/strategy/research.md (do not overwrite the existing report)." --project "$PROJECT_PATH" --timeout 180
+Append findings to the relevant .factory/strategy/research-*.md tagged file (do not overwrite existing reports)." --project "$PROJECT_PATH" --timeout 180
 ```
 
 **Re-spawn the Distiller with feedback:**
@@ -560,7 +614,7 @@ Raw idea: <RAW_IDEA>
 
 <paste any new research findings, or 'None — original research still applies'>
 
-Read the full research report at .factory/strategy/research.md for context.
+Read all tagged research files at .factory/strategy/research-*.md for context.
 
 Produce a complete updated specification." --project "$PROJECT_PATH" --timeout 300
 ```
@@ -580,7 +634,7 @@ When the user approves the spec:
    ```bash
    factory agent archivist --task "Record the ideation process for $PROJECT_PATH.
    Read .factory/strategy/current.md (the approved spec).
-   Read .factory/strategy/research.md (the research).
+   Read all tagged research files at .factory/strategy/research-*.md (the research).
    Write project inception notes to .factory/archive/. Then run: factory report-update $PROJECT_PATH" --project "$PROJECT_PATH"
    ```
 4. **Transition — route by project type:**
@@ -617,7 +671,7 @@ Read the `.factory/` directory yourself to determine whether to resume an interr
 
 | Phase | Completed When |
 |-------|---------------|
-| Research | `phase.research.completed` event exists, OR `ceo-verdict-researcher.md` exists, OR `strategy/research.md` exists |
+| Research | `phase.research.completed` event exists, OR `ceo-verdict-researcher.md` exists, OR any `strategy/research-*.md` file exists |
 | Strategy | `phase.strategy.completed` event exists, OR `ceo-verdict-strategist.md` exists, OR `strategy/current.md` exists |
 | Build | `phase.build.completed` event for that exp_id, OR `ceo-verdict-builder.md` exists |
 | Eval | `phase.eval.completed` event for that exp_id, OR `experiments/NNN/eval_after.json` exists |
@@ -656,35 +710,49 @@ This is an **inviolable constraint**. There is NO valid reason to exit between p
 
 Violating this constraint means the factory produced no usable output. A project with only scaffolds and no implementation is a failure, regardless of how clean the scaffolds are.
 
-### B0: Research (Researcher Agent)
+### B0: Research (Parallel Researchers)
+
+Spawn 2-3 focused researchers in parallel:
 
 ```bash
-factory agent researcher --task "Mode 1 Discovery for $PROJECT_PATH.
+factory agent researcher --review-tag techstack --task "Tech stack research for $PROJECT_PATH.
 The project is new or incomplete. Research:
-1. Analyze the project specification (see below)
+1. Analyze the project specification at $PROJECT_PATH/.factory/strategy/current.md
 2. Search the web for similar projects, best practices, and architecture patterns
-3. Check .factory/archive/ for prior knowledge on similar builds
-4. Identify key technical decisions (language, framework, database, APIs)
-5. Write a research report to .factory/strategy/research.md covering: similar projects found, recommended tech stack, architecture patterns, potential pitfalls, and MVP scope
-
-The project specification is saved at $PROJECT_PATH/.factory/strategy/current.md — read it for full details.
-" --project "$PROJECT_PATH" --timeout 600
+3. Identify key technical decisions (language, framework, database, APIs)
+4. Write findings to .factory/strategy/research-techstack.md covering: recommended tech stack, architecture patterns, and framework comparisons
+" --project "$PROJECT_PATH" --timeout 600 &
+factory agent researcher --review-tag domain --task "Domain research for $PROJECT_PATH.
+The project is new or incomplete. Research:
+1. Analyze the project specification at $PROJECT_PATH/.factory/strategy/current.md
+2. Search the web for domain-specific best practices and potential pitfalls
+3. Identify MVP scope and common mistakes for this type of project
+4. Write findings to .factory/strategy/research-domain.md covering: similar projects found (with links), potential pitfalls, and MVP scope recommendation
+" --project "$PROJECT_PATH" --timeout 600 &
+factory agent researcher --review-tag archive --task "Prior art research for $PROJECT_PATH.
+The project is new or incomplete. Research:
+1. Check .factory/archive/ for prior knowledge on similar builds
+2. Read cross-project insights if available
+3. Write findings to .factory/strategy/research-archive.md covering: lessons from prior builds and reusable patterns
+" --project "$PROJECT_PATH" --timeout 600 &
+wait
 ```
 
 ### B0r: CEO Review — Research
 
 Apply the **CEO Review Gate**:
-1. Read `.factory/reviews/researcher-latest.md` and `.factory/strategy/research.md`
-2. Check: Did the Researcher cover the right topics? Is there enough depth to inform a build plan? Any obvious technology gaps?
-3. Write verdict to `.factory/reviews/ceo-verdict-researcher.md`
-4. If REDIRECT: re-invoke the Researcher with specific gaps to fill (max 2 retries)
-5. If PROCEED: continue to B0a
+1. Read all tagged review files: `.factory/reviews/researcher-techstack-latest.md`, `.factory/reviews/researcher-domain-latest.md`, `.factory/reviews/researcher-archive-latest.md`
+2. Read research outputs: `.factory/strategy/research-techstack.md`, `.factory/strategy/research-domain.md`, `.factory/strategy/research-archive.md`
+3. Check: Did the researchers cover the right topics? Is there enough depth to inform a build plan? Any obvious technology gaps?
+4. Write verdict to `.factory/reviews/ceo-verdict-researcher.md`
+5. If REDIRECT: re-invoke individual researchers (by tag) with specific gaps to fill (max 2 retries)
+6. If PROCEED: continue to B0a
 
 ### B0a: MANDATORY Archivist — record research (DO NOT SKIP)
 
 ```bash
 factory agent archivist --task "Record the Researcher's findings for the new project $PROJECT_PATH.
-Read .factory/strategy/research.md and .factory/reviews/ceo-verdict-researcher.md.
+Read .factory/strategy/research-techstack.md, .factory/strategy/research-domain.md, .factory/strategy/research-archive.md, and .factory/reviews/ceo-verdict-researcher.md.
 Write research notes to .factory/archive/sources/. Then run: factory report-update $PROJECT_PATH" --project "$PROJECT_PATH"
 ```
 
@@ -700,7 +768,7 @@ Include your research review notes in the Strategist's task so it knows what the
 ```bash
 factory agent strategist --task "Create a build plan for the new project at $PROJECT_PATH.
 
-Read the research report at .factory/strategy/research.md.
+Read the research reports at .factory/strategy/research-techstack.md, .factory/strategy/research-domain.md, .factory/strategy/research-archive.md.
 Read the CEO's research review at .factory/reviews/ceo-verdict-researcher.md for priorities.
 Generate a phased build plan as GitHub issues:
 - Phase 1: Project scaffold + eval harness (always first)
@@ -971,7 +1039,7 @@ Read the `.factory/` directory yourself to determine whether to resume an interr
 
 | Phase | Completed When |
 |-------|---------------|
-| Research | `phase.research.completed` event exists, OR `ceo-verdict-researcher.md` exists, OR `strategy/research.md` exists |
+| Research | `phase.research.completed` event exists, OR `ceo-verdict-researcher.md` exists, OR any `strategy/research-*.md` file exists |
 | Strategy | `phase.strategy.completed` event exists, OR `ceo-verdict-strategist.md` exists, OR `strategy/current.md` exists |
 | Build | `phase.build.completed` event for that exp_id, OR `ceo-verdict-builder.md` exists |
 | Eval | `phase.eval.completed` event for that exp_id, OR `experiments/NNN/eval_after.json` exists |
@@ -1003,27 +1071,33 @@ Where `$FOCUS_FLAG` is either empty (no focus) or `--focus "<target>"` from the 
 
 Writes observations to `$PROJECT_PATH/.factory/strategy/observations.md`. Includes cross-project insights and observability coverage analysis.
 
-**0b. Deep Research (Researcher Agent)**
+**0b. Deep Research (Parallel Researchers)**
+
+Spawn 3 focused researchers in parallel using `--review-tag` for distinct output files:
 
 ```bash
-factory agent researcher --task "Mode 2 research for $PROJECT_PATH. Read observations at .factory/strategy/observations.md. Search the web for relevant resources, best practices, and similar projects. Check .factory/archive/ for prior knowledge. Write research report to .factory/strategy/research.md" --project "$PROJECT_PATH" --timeout 600
+factory agent researcher --review-tag local --task "Local analysis for $PROJECT_PATH. Read observations at .factory/strategy/observations.md. Analyze codebase structure, eval scores, and experiment history via 'factory history $PROJECT_PATH'. Write findings to .factory/strategy/research-local.md" --project "$PROJECT_PATH" --timeout 600 &
+factory agent researcher --review-tag external --task "External research for $PROJECT_PATH. Search the web for best practices, similar projects, and ecosystem tools relevant to weak dimensions. Check .factory/archive/ for prior knowledge. Write findings to .factory/strategy/research-external.md" --project "$PROJECT_PATH" --timeout 600 &
+factory agent researcher --review-tag context --task "Context analysis for $PROJECT_PATH. Read backlog at .factory/strategy/backlog.md, open issues, cross-project insights from .factory/strategy/insights.md, and strategy history at .factory/strategy/current.md. Write findings to .factory/strategy/research-context.md" --project "$PROJECT_PATH" --timeout 600 &
+wait
 ```
 
-If the Researcher fails, proceed — the Strategist can work from local observations alone.
+If all researchers fail, proceed — the Strategist can work from local observations alone.
 
 **0b-review: CEO Review — Research**
 
 Apply the **CEO Review Gate**:
-1. Read `.factory/reviews/researcher-latest.md` and `.factory/strategy/research.md`
-2. Check: Are observations grounded in data? Did web research surface useful patterns? Any blind spots?
-3. Write verdict to `.factory/reviews/ceo-verdict-researcher.md`
-4. If REDIRECT: re-invoke the Researcher with specific gaps
-5. If PROCEED: continue
+1. Read all 3 tagged review files: `.factory/reviews/researcher-local-latest.md`, `.factory/reviews/researcher-external-latest.md`, `.factory/reviews/researcher-context-latest.md`
+2. Read research outputs: `.factory/strategy/research-local.md`, `.factory/strategy/research-external.md`, `.factory/strategy/research-context.md`
+3. Check: Are observations grounded in data? Did web research surface useful patterns? Any blind spots?
+4. Write verdict to `.factory/reviews/ceo-verdict-researcher.md`
+5. If REDIRECT: re-invoke individual researchers (by tag) with specific gaps
+6. If PROCEED: continue
 
 **0c. MANDATORY Archivist — record research findings (DO NOT SKIP)**
 
 ```bash
-factory agent archivist --task "Record the Researcher's findings. Read .factory/strategy/observations.md, .factory/strategy/research.md, and .factory/reviews/ceo-verdict-researcher.md. Write source notes to .factory/archive/sources/. Update the project dashboard. Then run: factory report-update $PROJECT_PATH" --project "$PROJECT_PATH"
+factory agent archivist --task "Record the Researcher's findings. Read .factory/strategy/observations.md, .factory/strategy/research-local.md, .factory/strategy/research-external.md, .factory/strategy/research-context.md, and .factory/reviews/ceo-verdict-researcher.md. Write source notes to .factory/archive/sources/. Update the project dashboard. Then run: factory report-update $PROJECT_PATH" --project "$PROJECT_PATH"
 ```
 
 Then write checkpoint:
@@ -1062,7 +1136,7 @@ $(cat "$PROJECT_PATH/factory.md")
 
 $(cat "$PROJECT_PATH/.factory/strategy/observations.md" 2>/dev/null || echo 'No observations')
 
-$(cat "$PROJECT_PATH/.factory/strategy/research.md" 2>/dev/null || echo 'No research')
+$(cat "$PROJECT_PATH/.factory/strategy/research-local.md" 2>/dev/null; cat "$PROJECT_PATH/.factory/strategy/research-external.md" 2>/dev/null; cat "$PROJECT_PATH/.factory/strategy/research-context.md" 2>/dev/null)
 
 $(cat "$PROJECT_PATH/.factory/strategy/insights.md" 2>/dev/null || echo 'No cross-project insights')
 
@@ -1919,12 +1993,12 @@ factory checkpoint "$PROJECT_PATH" --save --mode research \
   --completed "baseline,failure_analyst" --pending "researcher,strategist,builder,evaluator,archivist"
 ```
 
-### Phase R1.5: RESEARCH (Researcher Agent)
+### Phase R1.5: RESEARCH (Parallel Researchers)
 
-After the Failure Analyst classifies what failed and why, spawn the Researcher to search for solutions to those specific failure patterns. This step is MANDATORY — do NOT skip it. The Researcher provides critical web research and domain knowledge that the Strategist needs to generate effective hypotheses.
+After the Failure Analyst classifies what failed and why, spawn 2 focused researchers in parallel to search for solutions. This step is MANDATORY — do NOT skip it. The researchers provide critical web research and domain knowledge that the Strategist needs to generate effective hypotheses.
 
 ```bash
-factory agent researcher --task "Mode 4 failure research for $PROJECT_PATH.
+factory agent researcher --review-tag failures --task "Failure-targeted web research for $PROJECT_PATH.
 
 Read the failure analysis at .factory/research/runs/$CYCLE_ID/failure_analysis.md.
 Read the research target config from .factory/config.json (objective: $OBJECTIVE, metric: $METRIC, target: $TARGET).
@@ -1941,28 +2015,38 @@ $FIXED_SURFACES
 Research constraints:
 $RESEARCH_CONSTRAINTS
 
-Check .factory/archive/ for prior knowledge on these failure patterns.
-
 Search the web for solutions, workarounds, and best practices for the dominant failure modes.
-Write research report to .factory/strategy/research.md" --project "$PROJECT_PATH" --timeout 600
+Write findings to .factory/strategy/research-failures.md" --project "$PROJECT_PATH" --timeout 600 &
+factory agent researcher --review-tag priorart --task "Prior knowledge research for $PROJECT_PATH.
+
+Read the failure analysis at .factory/research/runs/$CYCLE_ID/failure_analysis.md.
+Read the research target config from .factory/config.json (objective: $OBJECTIVE, metric: $METRIC, target: $TARGET).
+
+The dominant failure mode is: $DOMINANT_FAILURE_MODE ($FAILURE_PERCENTAGE%)
+
+Check .factory/archive/ for prior knowledge on these failure patterns.
+Read past experiment verdicts and strategy history for what has been tried before.
+Write findings to .factory/strategy/research-priorart.md" --project "$PROJECT_PATH" --timeout 600 &
+wait
 ```
 
-If the Researcher crashes (non-zero exit), retry once. If it fails again, proceed to R2 — but log the failure. Do NOT preemptively skip the Researcher.
+If both researchers crash (non-zero exit), retry each once. If they fail again, proceed to R2 — but log the failure. Do NOT preemptively skip the researchers.
 
 **R1.5-review: CEO Review — Research**
 
 Apply the **CEO Review Gate**:
-1. Read `.factory/reviews/researcher-latest.md` and `.factory/strategy/research.md`
-2. Check: Are findings specific to the failure patterns from R1? Did web research surface actionable fixes? Are suggested solutions within mutable surfaces?
-3. Write verdict to `.factory/reviews/ceo-verdict-researcher.md`
-4. If REDIRECT: re-invoke the Researcher with specific gaps (e.g., "Research focused on general domain, not the specific LOCALIZATION_MISS failure pattern")
-5. If PROCEED: continue to R2
+1. Read tagged review files: `.factory/reviews/researcher-failures-latest.md` and `.factory/reviews/researcher-priorart-latest.md`
+2. Read research outputs: `.factory/strategy/research-failures.md` and `.factory/strategy/research-priorart.md`
+3. Check: Are findings specific to the failure patterns from R1? Did web research surface actionable fixes? Are suggested solutions within mutable surfaces?
+4. Write verdict to `.factory/reviews/ceo-verdict-researcher.md`
+5. If REDIRECT: re-invoke individual researchers (by tag) with specific gaps (e.g., "Research focused on general domain, not the specific LOCALIZATION_MISS failure pattern")
+6. If PROCEED: continue to R2
 
 **MANDATORY Archivist — record research findings (DO NOT SKIP):**
 
 ```bash
 factory agent archivist --task "Record the Researcher's failure-targeted findings for $PROJECT_PATH research cycle.
-Read .factory/strategy/research.md, .factory/research/runs/$CYCLE_ID/failure_analysis.md, and .factory/reviews/ceo-verdict-researcher.md.
+Read .factory/strategy/research-failures.md, .factory/strategy/research-priorart.md, .factory/research/runs/$CYCLE_ID/failure_analysis.md, and .factory/reviews/ceo-verdict-researcher.md.
 Write research notes to .factory/archive/sources/. Then run: factory report-update $PROJECT_PATH" --project "$PROJECT_PATH"
 ```
 
@@ -2001,7 +2085,7 @@ Generate 1-3 hypotheses that target the dominant failure modes identified by the
 Prioritize by expected impact on the target metric.
 Each hypothesis must name specific files from mutable_surfaces to modify.
 
-$(cat $PROJECT_PATH/.factory/strategy/research.md 2>/dev/null || echo 'No prior research')
+$(cat "$PROJECT_PATH/.factory/strategy/research-failures.md" 2>/dev/null; cat "$PROJECT_PATH/.factory/strategy/research-priorart.md" 2>/dev/null)
 
 $(factory history $PROJECT_PATH 2>/dev/null || echo 'No experiments yet')
 
