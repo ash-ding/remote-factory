@@ -145,6 +145,8 @@ async def _run_project_eval(
     These are project-specific ADDITIONS to the mandatory 11 dimensions.
     """
     parts = eval_command.split()
+    if not parts:
+        return []
 
     # Clean environment
     env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
