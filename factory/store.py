@@ -357,7 +357,10 @@ class ExperimentStore:
         clean_pr_exclude = list(clean_pr_exclude_raw) if isinstance(clean_pr_exclude_raw, list) else []
 
         test_timeout_raw = parsed.get("test_timeout", "")
-        test_timeout = int(float(str(test_timeout_raw).strip())) if test_timeout_raw else 600
+        try:
+            test_timeout = int(float(str(test_timeout_raw).strip())) if test_timeout_raw else 600
+        except (ValueError, TypeError):
+            test_timeout = 600
 
         config = FactoryConfig(
             goal=str(parsed.get("goal", "")),
