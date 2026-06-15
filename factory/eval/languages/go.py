@@ -94,11 +94,6 @@ class GoEvaluator:
         _, cov_frag = self.run_tests_with_coverage(project_path)
         return cov_frag
 
-    def run_tests_with_coverage(
-        self, project_path: Path
-    ) -> tuple[EvalFragment | None, EvalFragment | None]:
-        return self.run_tests(project_path), None
-
 
 def register_evaluator() -> GoEvaluator:
     return GoEvaluator()
