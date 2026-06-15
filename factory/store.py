@@ -356,6 +356,9 @@ class ExperimentStore:
         clean_pr_exclude_raw = parsed.get("clean_pr_exclude", [])
         clean_pr_exclude = list(clean_pr_exclude_raw) if isinstance(clean_pr_exclude_raw, list) else []
 
+        test_timeout_raw = parsed.get("test_timeout", "")
+        test_timeout = int(float(str(test_timeout_raw).strip())) if test_timeout_raw else 600
+
         config = FactoryConfig(
             goal=str(parsed.get("goal", "")),
             scope=list(parsed.get("scope", [])),  # type: ignore[arg-type]
@@ -382,6 +385,7 @@ class ExperimentStore:
             clean_pr=clean_pr,
             clean_pr_include=clean_pr_include,
             clean_pr_exclude=clean_pr_exclude,
+            test_timeout=test_timeout,
         )
 
         (self.factory_dir / "config.json").write_text(
