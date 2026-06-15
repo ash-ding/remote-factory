@@ -34,6 +34,7 @@ def _reset_agent_failure_counter() -> None:
     reset_failure_counter()
 
 
+
 @pytest.fixture(autouse=True)
 def _mock_worktree(tmp_path: Path, request: pytest.FixtureRequest) -> None:
     """Stub worktree functions for tests that don't exercise worktree logic.
@@ -83,7 +84,7 @@ def sample_config() -> FactoryConfig:
         goal="Build a test project",
         scope=["src/**/*.py", "tests/**/*.py"],
         guards=["Do not delete tests"],
-        eval_command="python eval/score.py",
+        eval_command="",
         eval_threshold=0.8,
         constraints=["Prefer small changes"],
     )
