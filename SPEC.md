@@ -32,8 +32,8 @@ The system solves five operational problems:
   and explicit decisions.
 - It keeps project state durable enough to support resume, review, and
   learning.
-- It allows the same lifecycle semantics to be realized through different
-  deployment profiles without changing the meaning of a project cycle.
+- It is designed so future implementations can preserve the same lifecycle
+  semantics without changing the meaning of a project cycle.
 
 Important boundary:
 
@@ -43,7 +43,7 @@ Important boundary:
 - Agent execution MAY end at a handoff state; a successful run does not
   necessarily mean code was merged or released.
 - Trust, approval, sandboxing, and external write policies are
-  implementation-defined and MUST be documented by each deployment profile.
+  implementation-defined and MUST be documented by the implementation.
 
 ## 2. Goals and Non-Goals
 
@@ -61,8 +61,9 @@ Important boundary:
 - Preserve durable state for resume, review, and learning, with optional
   reconciliation to external systems where supported.
 - Treat the CLI-local profile as the primary compatibility surface.
-- Allow other deployment profiles to bundle different runtimes, state backends,
-  guardrails, and output surfaces while preserving common lifecycle semantics.
+- Allow future deployment profiles to bundle different runtimes, state
+  backends, guardrails, and output surfaces while preserving common lifecycle
+  semantics.
 
 ### 2.2 Non-Goals
 
@@ -72,6 +73,8 @@ Important boundary:
 - Requiring a rich web UI or dashboard.
 - Mandating one sandbox, approval, or operator-confirmation policy.
 - Mandating that agents perform ticket writes, PR creation, or merge actions.
+- Requiring multi-repository orchestration or multi-user shared-state
+  collaboration as part of core conformance.
 - Replacing human review, CI policy, or repository governance.
 
 ## 3. System Overview
@@ -138,7 +141,7 @@ re:factory is easiest to port when kept in these layers:
 
 ### 3.3 External Dependencies
 
-Depending on the selected deployment profile, implementations MAY depend on:
+Implementations MAY depend on:
 
 - Local filesystem state.
 - Git repositories and worktrees.
@@ -170,6 +173,8 @@ Rules:
 - A project MUST bind the execution context needed for the work.
 - Implementations MAY realize that execution context as one repository binding
   or multiple repository bindings.
+- A single local repository binding with local durable state is sufficient for
+  core conformance.
 - Work items, decisions, and memory belong to the project.
 - Diffs, branches, and checkouts belong to repository bindings.
 - Runtime and deployment profile are not project-owned.
@@ -202,6 +207,8 @@ Examples:
 
 State bindings MUST NOT imply that runtime execution happens in that state
 system.
+
+A single local durable state substrate is sufficient for core conformance.
 
 ### 4.4 Work Item
 
@@ -246,10 +253,12 @@ Logical fields:
 - `required_checks`
 - `budget`
 - `expected_evidence`
-- `report_schema`
+- `report_schema` (OPTIONAL)
 
 Worker runtimes MUST receive enough contract information to respect scope,
-surface, and reporting requirements.
+surface, and reporting requirements. This information MAY be conveyed through
+structured payloads, prompt content, or other implementation-defined
+mechanisms.
 
 ### 4.6 Worker Runtime
 
@@ -262,7 +271,7 @@ Examples:
 - plugin asset worker
 - managed remote agent
 
-Runtime selection is profile-defined. Runtime behavior MUST NOT change the
+Runtime selection is implementation-defined. Runtime behavior MUST NOT change the
 meaning of project, work-item, evidence, or decision records.
 
 ### 4.7 Guardrail
@@ -418,9 +427,9 @@ derived from evidence and guardrail outcomes.
 
 ### 5.7 Publish
 
-If the selected deployment profile supports publishing, it MAY update external
-systems such as branches, PRs, comments, ticket state, or managed-state records.
-Publishing behavior is implementation-defined.
+If an implementation supports publishing, it MAY update external systems such as
+branches, PRs, comments, ticket state, or managed-state records. Publishing
+behavior is implementation-defined.
 
 ### 5.8 Learn
 
@@ -474,7 +483,10 @@ important conflicts explicitly rather than silently applying last-writer-wins.
 
 ## 8. Guardrails and Trust Policy
 
-Each deployment profile MUST document its trust and safety posture.
+Each implementation MUST document its trust and safety posture.
+
+If an implementation defines additional deployment profiles, each profile MUST
+document any trust or policy differences that affect execution.
 
 Implementation-defined policy areas include:
 
