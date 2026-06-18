@@ -207,9 +207,7 @@ def _ingest_transcript(
     """
     claude_dir = Path.home() / ".claude" / "projects"
     project_str = str(project_path.resolve())
-    dir_name = project_str.replace("/", "-")
-    if dir_name.startswith("-"):
-        dir_name = dir_name  # keep leading dash
+    dir_name = project_str.replace("/", "-").replace(".", "-")
     transcript_file = claude_dir / dir_name / f"{claude_session_id}.jsonl"
 
     if not transcript_file.exists():
@@ -335,10 +333,9 @@ def backfill_transcripts(project_path: Path) -> int:
         for row in rows:
             sid = row["id"]
             claude_sid = row["claude_session_id"]
-            # Check if transcript exists before deleting old items
             claude_dir = Path.home() / ".claude" / "projects"
             project_str = str(project_path.resolve())
-            dir_name = project_str.replace("/", "-")
+            dir_name = project_str.replace("/", "-").replace(".", "-")
             transcript_file = claude_dir / dir_name / f"{claude_sid}.jsonl"
             if not transcript_file.exists():
                 continue
