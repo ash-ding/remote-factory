@@ -22,7 +22,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:12p
 .back-link{color:var(--accent);text-decoration:none;font-size:13px}
 .back-link:hover{text-decoration:underline}
 
-.content{display:grid;grid-template-columns:340px 1fr;height:calc(100vh - 49px);overflow:hidden}
+.content{display:grid;grid-template-columns:300px 1fr;height:calc(100vh - 49px);overflow:hidden}
 
 /* ── Cycle List Panel ── */
 .cycle-panel{border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
@@ -361,13 +361,17 @@ function renderCycleDetail(cycle) {
     html += renderSessionChat(ceoItems);
     if (cycle.claude_session_id) {
       html += renderChatInput(cycle.id);
+    } else {
+      html += renderViewOnly();
     }
     html += '</div>';
     html += '</div>';
   }
 
-  // Child sessions
-  children.forEach(function(child) {
+  // Child sessions — auto-expand first one
+  children.forEach(function(child, idx) {
+    var autoExpand = (idx === 0 && !Object.keys(expandedSessions).length);
+    if (autoExpand) expandedSessions[child.id] = true;
     var isOpen = expandedSessions[child.id] ? ' open' : '';
     html += '<div class="agent-section' + isOpen + '" id="section-' + esc(child.id) + '">';
     html += renderAgentSectionHeader(child, false);
@@ -398,7 +402,7 @@ function renderAgentSectionHeader(session, isCeo) {
   html += '<span class="agent-section-arrow">&#9656;</span>';
   html += '<div class="agent-section-info">';
   html += '<span class="status-dot ' + esc(statusCls) + '"></span>';
-  html += renderRoleBadge(session.agent_role);
+  html += renderRoleBadge(isCeo ? 'ceo' : session.agent_role);
   if (session.claude_session_id) {
     html += '<span class="interactive-badge interactive">interactive</span>';
   }
@@ -452,6 +456,8 @@ async function loadSessionItems(sessionId) {
     var html = renderSessionChat(items);
     if (session.claude_session_id) {
       html += renderChatInput(sessionId);
+    } else {
+      html += renderViewOnly();
     }
     body.innerHTML = html;
     body.dataset.loaded = 'true';
@@ -484,6 +490,12 @@ function renderChatInput(sessionId) {
   return '<div class="chat-input-area">' +
     '<textarea class="chat-input" id="chat-input-' + esc(sessionId) + '" placeholder="Send a follow-up message..." rows="1" onkeydown="handleChatKey(event, \'' + esc(sessionId) + '\')"></textarea>' +
     '<button class="chat-send-btn" id="chat-send-' + esc(sessionId) + '" onclick="sendMessage(\'' + esc(sessionId) + '\')">Send</button>' +
+    '</div>';
+}
+
+function renderViewOnly() {
+  return '<div class="chat-input-area" style="justify-content:center">' +
+    '<span style="font-size:11px;color:var(--text-dim);padding:6px 0">view only — no interactive session</span>' +
     '</div>';
 }
 
