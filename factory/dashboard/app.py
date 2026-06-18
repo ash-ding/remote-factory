@@ -754,6 +754,9 @@ def create_app(projects_dir: Path) -> FastAPI:
             except Exception:
                 pass
 
+        import tempfile
+
+        prompt_file = None
         cmd = [
             claude_bin,
             "--resume", claude_session_id,
@@ -762,7 +765,12 @@ def create_app(projects_dir: Path) -> FastAPI:
             "--dangerously-skip-permissions",
         ]
         if role_prompt:
-            cmd.extend(["--system-prompt", role_prompt])
+            prompt_file = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".md", delete=False,
+            )
+            prompt_file.write(role_prompt)
+            prompt_file.close()
+            cmd.extend(["--system-prompt-file", prompt_file.name])
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -779,6 +787,10 @@ def create_app(projects_dir: Path) -> FastAPI:
             raise HTTPException(status_code=504, detail="Resume timed out after 120s")
         except FileNotFoundError:
             raise HTTPException(status_code=500, detail="claude CLI not found on PATH")
+        finally:
+            if prompt_file:
+                import os
+                os.unlink(prompt_file.name)
 
         if proc.returncode != 0:
             log.warning(
