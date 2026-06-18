@@ -418,6 +418,11 @@ Dispatch modes include:
 - **background** — the worker is launched as a detached session; the caller
   polls for completion and collects output when the session finishes
 
+Dispatch mode MAY be scoped independently per lifecycle tier. For example, a
+coordinator MAY run synchronously while its delegated workers dispatch in
+background mode, allowing the operator to observe the coordinator while
+workers remain visible through an agent management interface.
+
 Dispatch mode is a runtime concern. It MUST NOT change the semantics of the
 execution contract, evidence records, or decision lifecycle.
 
