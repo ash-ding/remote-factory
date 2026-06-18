@@ -2516,6 +2516,8 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     use_profile = getattr(args, "use_profile", False)
     tmux_persist = _resolve_tmux_persist(args)
     background = _resolve_background(args)
+    if bg_agents:
+        background = False
     if background and tmux_persist:
         print("Error: --bg and --tmux-persist are mutually exclusive.", file=sys.stderr)
         return 1
@@ -3565,6 +3567,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     tmux_persist = _resolve_tmux_persist(args)
     background = _resolve_background(args)
     bg_agents = _resolve_bg_agents(args)
+    if bg_agents:
+        background = False
     if background and tmux_persist:
         print("Error: --bg and --tmux-persist are mutually exclusive.", file=sys.stderr)
         return 1
