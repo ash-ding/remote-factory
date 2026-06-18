@@ -139,6 +139,7 @@ async def invoke_agent(
     use_profile: bool = False,
     tmux_persist: bool = False,
     review_tag: str | None = None,
+    parent_session_id: str | None = None,
 ) -> tuple[str, int]:
     """Invoke a Claude Code agent with the resolved prompt + task.
 
@@ -176,6 +177,8 @@ async def invoke_agent(
         started_data["review_tag"] = review_tag
     _emit_safe(project_path, "agent.started", agent=role, data=started_data)
 
+    sid = _begin_session_safe(project_path, role, model=model, parent_session_id=parent_session_id)
+
     runner = get_runner(runner_name, project_path=project_path)
 
     agent_session_name = session_name or f"factory: {project_path.resolve().name}/{role}"
@@ -203,6 +206,7 @@ async def invoke_agent(
     except Exception as e:
         logger.error("%s agent failed: %s", role, e)
         _emit_safe(project_path, "agent.failed", agent=role, data={"error": str(e)[:200]})
+        _complete_session_safe(project_path, sid, status="failed")
         if _track_failures:
             _consecutive_failures += 1
             _check_failure_threshold(project_path, role)
@@ -213,6 +217,10 @@ async def invoke_agent(
         _emit_safe(
             project_path, "agent.failed", agent=role,
             data={"return_code": return_code, "stderr": stdout[:200] if stdout else ""},
+        )
+        _complete_session_safe(
+            project_path, sid, status="failed",
+            usage=usage, metadata=result.metadata, output=stdout,
         )
         if _track_failures:
             _consecutive_failures += 1
@@ -229,10 +237,18 @@ async def invoke_agent(
                 "total_cost_usd": usage.total_cost_usd,
                 "duration_ms": usage.duration_ms,
                 "num_turns": usage.num_turns,
+                "model": usage.model,
             })
+        for meta_key in ("session_id", "stop_reason", "terminal_reason"):
+            if result.metadata.get(meta_key) is not None:
+                completed_data[meta_key] = result.metadata[meta_key]
         _emit_safe(
             project_path, "agent.completed", agent=role,
             data=completed_data,
+        )
+        _complete_session_safe(
+            project_path, sid, status="completed",
+            usage=usage, metadata=result.metadata, output=stdout,
         )
         if _track_failures:
             _consecutive_failures = 0
@@ -268,6 +284,50 @@ def _emit_safe(project_path: Path, event_type: str, **kwargs: object) -> None:
         emit_event(project_path, event_type, **kwargs)  # type: ignore[arg-type]
     except Exception:
         logger.debug("Failed to emit event %s", event_type, exc_info=True)
+
+
+def _begin_session_safe(
+    project_path: Path,
+    role: str,
+    *,
+    model: str | None = None,
+    parent_session_id: str | None = None,
+) -> str | None:
+    """Begin a session, swallowing errors so agent invocation is never blocked."""
+    try:
+        from factory.sessions import begin_session
+
+        return begin_session(
+            project_path, role,
+            parent_id=parent_session_id,
+            model=model,
+        )
+    except Exception:
+        logger.debug("Failed to begin session for %s", role, exc_info=True)
+        return None
+
+
+def _complete_session_safe(
+    project_path: Path,
+    session_id: str | None,
+    *,
+    status: str = "completed",
+    usage: object | None = None,
+    metadata: dict[str, object] | None = None,
+    output: str | None = None,
+) -> None:
+    """Complete a session, swallowing errors so agent invocation is never blocked."""
+    if session_id is None:
+        return
+    try:
+        from factory.sessions import complete_session
+
+        complete_session(
+            project_path, session_id,
+            status=status, usage=usage, metadata=metadata, output=output,
+        )
+    except Exception:
+        logger.debug("Failed to complete session %s", session_id, exc_info=True)
 
 
 def _save_review(
