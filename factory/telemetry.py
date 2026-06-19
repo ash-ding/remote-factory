@@ -211,8 +211,11 @@ def end_trace(trace_id: str, span_id: str | None = None, output: str | None = No
 
 
 def flush() -> None:
-    """Flush any buffered Langfuse events."""
+    """Flush any buffered Langfuse events and re-assert trace names."""
     if _client is not None:
+        for trace_id, (name, input_data) in list(_trace_names.items()):
+            _update_trace_via_api(trace_id, name, input_data)
+        _trace_names.clear()
         _get_client().flush()
 
 

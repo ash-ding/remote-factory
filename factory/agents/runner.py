@@ -351,6 +351,8 @@ def _complete_span_safe(
             status=status, usage=usage_dict, metadata=meta or None,
             output=output[:4000] if output else None,
         )
+        from factory.telemetry import flush as _flush
+        _flush()
     except Exception:
         logger.debug("Failed to complete span %s", span_id, exc_info=True)
 
