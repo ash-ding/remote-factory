@@ -21,6 +21,7 @@ except ImportError:
 
 _client: object | None = None
 _observations: dict[str, Any] = {}
+_trace_names: dict[str, tuple[str, Any]] = {}  # trace_id -> (name, input)
 
 def is_enabled() -> bool:
     """Check if Langfuse is configured and lazily initialise the client."""
@@ -106,6 +107,7 @@ def begin_trace(
         metadata={"model": model, "project": project_name},
     )
     _observations[obs.id] = obs
+    _trace_names[obs.trace_id] = (trace_name, trace_input)
     _update_trace_via_api(obs.trace_id, trace_name, trace_input)
     log.debug("langfuse_trace_started", trace_id=obs.trace_id, span_id=obs.id)
     return (obs.trace_id, obs.id)
@@ -191,16 +193,20 @@ def end_span(
     log.debug("langfuse_span_ended", span_id=span_id, status=status)
 
 
-def end_trace(trace_id: str, span_id: str | None = None) -> None:
-    """Mark a root trace span as finished."""
+def end_trace(trace_id: str, span_id: str | None = None, output: str | None = None) -> None:
+    """Mark a root trace span as finished and re-assert trace name."""
     if not is_enabled():
         return
     sid = span_id or trace_id
     obs = _observations.get(sid)
     if obs is not None:
-        obs.update(output={"status": "completed"})
+        obs.update(output=output or {"status": "completed"})
         obs.end()
         _observations.pop(sid, None)
+    saved = _trace_names.pop(trace_id, None)
+    if saved:
+        name, input_data = saved
+        _update_trace_via_api(trace_id, name, input_data)
     log.debug("langfuse_trace_ended", trace_id=trace_id)
 
 
