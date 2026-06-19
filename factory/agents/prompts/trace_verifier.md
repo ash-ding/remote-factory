@@ -83,11 +83,28 @@ A real factory agent run should produce multiple observations:
 If the trace has an `agent:ceo` span, specialist spans (agent:researcher, agent:builder, etc.) must be children of the CEO span — NOT siblings at the root level.
 - FAIL if specialist spans are at root level when a CEO span exists
 
-### Check 12: Data Equivalence  
-Compare against what the SQLite session system captured:
-- Each agent must have: task prompt (span input), final response (span output), conversation items (child observations)
-- Tool calls must have BOTH input AND output (not just one)
-- FAIL if any agent has fewer than 3 child observations
+### Check 12: Transcript Equivalence (Apple-to-Apple)
+For each agent span, find its Claude Code JSONL transcript file and count items independently:
+
+```bash
+# Find transcript: ~/.claude/projects/<project-hash>/<claude_session_id>.jsonl
+# The claude_session_id is in the span metadata (uuid or session_id field)
+```
+
+Count items in the transcript using the SQLite parser logic:
+- `user` items with `tool_result` content → count as tool_outputs
+- `user` items with text content → count as messages  
+- `assistant` items with `text` content → count as messages
+- `assistant` items with `tool_use` content → count as tool_calls
+- `assistant` items with `thinking` content → count as thinking
+
+Expected Langfuse observations = messages + tool_calls + thinking (tool_call and tool_output pair into one TOOL observation).
+
+Compare:
+- Langfuse EVENT count should equal messages + thinking from transcript
+- Langfuse TOOL count should equal tool_calls from transcript
+- FAIL if Langfuse has fewer observations than expected from the transcript
+- FAIL if Langfuse TOOL count doesn't match tool_call count from transcript
 
 ## Output Format
 
