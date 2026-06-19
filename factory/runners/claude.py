@@ -110,12 +110,18 @@ class ClaudeRunner:
 
             usage = None
             result_text = result.stdout
+            metadata: dict[str, object] = {**result.metadata}
             try:
                 data = json.loads(result.stdout)
                 if isinstance(data, dict):
                     result_value = data.get("result", result.stdout)
                     result_text = result_value if isinstance(result_value, str) else result.stdout
                     usage = _parse_usage(data)
+                    for key in ("session_id", "uuid", "stop_reason", "terminal_reason",
+                                "duration_api_ms", "ttft_ms", "is_error", "subtype"):
+                        metadata[key] = data.get(key)
+                    metadata["model_usage"] = data.get("modelUsage")
+                    metadata["permission_denials"] = data.get("permission_denials")
             except (json.JSONDecodeError, ValueError):
                 log.debug("claude_json_parse_failed")
 
@@ -123,7 +129,7 @@ class ClaudeRunner:
                 stdout=result_text,
                 return_code=result.return_code,
                 usage=usage,
-                metadata=result.metadata,
+                metadata=metadata,
             )
         finally:
             for f in temp_files:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -142,23 +143,6 @@ async def invoke_agent(
 ) -> tuple[str, int]:
     """Invoke a Claude Code agent with the resolved prompt + task.
 
-    Args:
-        role: The agent role to invoke.
-        task: The task description.
-        project_path: Path to the project.
-        timeout: Maximum execution time in seconds.
-        dangerously_skip_permissions: If True, skip permission prompts.
-        model: Optional model override.
-        runner_name: CLI backend to use ("claude" or "bob"). Defaults to FACTORY_RUNNER env var.
-        _track_failures: If True (default), track consecutive failures globally.
-            Set to False when called from invoke_agents_parallel to avoid race conditions.
-        session_name: Optional session name for /resume identification.
-            If not provided, defaults to "factory: {project_name}/{role}".
-        use_profile: If True, inject user profile into the agent prompt.
-        tmux_persist: If True, run the agent interactively in a tmux window.
-        review_tag: Optional tag for distinct review output files.
-            When set, output is saved as ``<role>-<tag>-latest.md``.
-
     Returns (stdout, return_code).
 
     Raises:
@@ -175,6 +159,8 @@ async def invoke_agent(
     if review_tag:
         started_data["review_tag"] = review_tag
     _emit_safe(project_path, "agent.started", agent=role, data=started_data)
+
+    sid = _begin_span_safe(project_path, role, model=model, task=task)
 
     runner = get_runner(runner_name, project_path=project_path)
 
@@ -195,51 +181,73 @@ async def invoke_agent(
         extras={"tmux_persist": tmux_persist},
     )
 
+    old_parent_span = os.environ.get("FACTORY_PARENT_SPAN_ID")
+    if sid:
+        os.environ["FACTORY_PARENT_SPAN_ID"] = sid
     try:
-        result = await runner.headless(request)
-        stdout = result.stdout
-        return_code = result.return_code
-        usage = result.usage
-    except Exception as e:
-        logger.error("%s agent failed: %s", role, e)
-        _emit_safe(project_path, "agent.failed", agent=role, data={"error": str(e)[:200]})
-        if _track_failures:
-            _consecutive_failures += 1
-            _check_failure_threshold(project_path, role)
-        return f"Error: {e}", 1
+        try:
+            result = await runner.headless(request)
+            stdout = result.stdout
+            return_code = result.return_code
+            usage = result.usage
+        except Exception as e:
+            logger.error("%s agent failed: %s", role, e)
+            _emit_safe(project_path, "agent.failed", agent=role, data={"error": str(e)[:200]})
+            _complete_span_safe(project_path, sid, status="failed")
+            if _track_failures:
+                _consecutive_failures += 1
+                _check_failure_threshold(project_path, role)
+            return f"Error: {e}", 1
 
-    if return_code != 0:
-        logger.warning("%s agent exited with code %d", role, return_code)
-        _emit_safe(
-            project_path, "agent.failed", agent=role,
-            data={"return_code": return_code, "stderr": stdout[:200] if stdout else ""},
-        )
-        if _track_failures:
-            _consecutive_failures += 1
-            _check_failure_threshold(project_path, role)
-    else:
-        completed_data: dict[str, object] = {"return_code": 0}
-        if review_tag:
-            completed_data["review_tag"] = review_tag
-        if usage is not None:
-            completed_data.update({
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-                "cache_read_tokens": usage.cache_read_tokens,
-                "total_cost_usd": usage.total_cost_usd,
-                "duration_ms": usage.duration_ms,
-                "num_turns": usage.num_turns,
-            })
-        _emit_safe(
-            project_path, "agent.completed", agent=role,
-            data=completed_data,
-        )
-        if _track_failures:
-            _consecutive_failures = 0
+        if return_code != 0:
+            logger.warning("%s agent exited with code %d", role, return_code)
+            _emit_safe(
+                project_path, "agent.failed", agent=role,
+                data={"return_code": return_code, "stderr": stdout[:200] if stdout else ""},
+            )
+            _complete_span_safe(
+                project_path, sid, status="failed",
+                usage=usage, metadata=result.metadata, output=stdout,
+            )
+            if _track_failures:
+                _consecutive_failures += 1
+                _check_failure_threshold(project_path, role)
+        else:
+            completed_data: dict[str, object] = {"return_code": 0}
+            if review_tag:
+                completed_data["review_tag"] = review_tag
+            if usage is not None:
+                completed_data.update({
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                    "cache_read_tokens": usage.cache_read_tokens,
+                    "total_cost_usd": usage.total_cost_usd,
+                    "duration_ms": usage.duration_ms,
+                    "num_turns": usage.num_turns,
+                    "model": usage.model,
+                })
+            for meta_key in ("session_id", "stop_reason", "terminal_reason"):
+                if result.metadata.get(meta_key) is not None:
+                    completed_data[meta_key] = result.metadata[meta_key]
+            _emit_safe(
+                project_path, "agent.completed", agent=role,
+                data=completed_data,
+            )
+            _complete_span_safe(
+                project_path, sid, status="completed",
+                usage=usage, metadata=result.metadata, output=stdout,
+            )
+            if _track_failures:
+                _consecutive_failures = 0
 
-    _save_review(project_path, role, stdout, return_code, review_tag=review_tag)
+        _save_review(project_path, role, stdout, return_code, review_tag=review_tag)
 
-    return stdout, return_code
+        return stdout, return_code
+    finally:
+        if old_parent_span is not None:
+            os.environ["FACTORY_PARENT_SPAN_ID"] = old_parent_span
+        elif sid:
+            os.environ.pop("FACTORY_PARENT_SPAN_ID", None)
 
 
 def _check_failure_threshold(project_path: Path, last_agent: str) -> None:
@@ -268,6 +276,85 @@ def _emit_safe(project_path: Path, event_type: str, **kwargs: object) -> None:
         emit_event(project_path, event_type, **kwargs)  # type: ignore[arg-type]
     except Exception:
         logger.debug("Failed to emit event %s", event_type, exc_info=True)
+
+
+def _begin_span_safe(
+    project_path: Path,
+    role: str,
+    *,
+    model: str | None = None,
+    task: str | None = None,
+) -> str | None:
+    """Begin a Langfuse span, swallowing errors so agent invocation is never blocked."""
+    try:
+        from factory.telemetry import begin_span, begin_trace, is_enabled
+
+        if not is_enabled():
+            return None
+        trace_id = os.environ.get("FACTORY_TRACE_ID")
+        parent_span_id = os.environ.get("FACTORY_PARENT_SPAN_ID")
+        logger.debug(
+            "Langfuse env: FACTORY_TRACE_ID=%s FACTORY_PARENT_SPAN_ID=%s",
+            trace_id, parent_span_id,
+        )
+        if not trace_id:
+            result = begin_trace(project_path.name, cycle_id=f"standalone-{role}")
+            if result is None:
+                return None
+            trace_id, root_span_id = result
+            os.environ["FACTORY_TRACE_ID"] = trace_id
+            os.environ["FACTORY_PARENT_SPAN_ID"] = root_span_id
+            parent_span_id = root_span_id
+        return begin_span(trace_id, parent_span_id, role, model=model, task=task)
+    except Exception:
+        logger.debug("Failed to begin span for %s", role, exc_info=True)
+        return None
+
+
+def _complete_span_safe(
+    project_path: Path,
+    span_id: str | None,
+    *,
+    status: str = "completed",
+    usage: object | None = None,
+    metadata: dict[str, object] | None = None,
+    output: str | None = None,
+) -> None:
+    """Complete a Langfuse span, swallowing errors so agent invocation is never blocked."""
+    if span_id is None:
+        return
+    try:
+        from factory.telemetry import end_span, ingest_transcript_to_span, is_enabled
+
+        if not is_enabled():
+            return
+        trace_id = os.environ.get("FACTORY_TRACE_ID")
+        if not trace_id:
+            return
+
+        usage_dict: dict | None = None
+        if usage is not None:
+            usage_dict = {}
+            for key in ("input_tokens", "output_tokens", "cache_read_tokens",
+                        "total_cost_usd", "duration_ms", "num_turns", "model"):
+                val = getattr(usage, key, None)
+                if val is not None:
+                    usage_dict[key] = val
+
+        meta = dict(metadata or {})
+        claude_session_id = meta.pop("session_id", None)
+        if claude_session_id:
+            ingest_transcript_to_span(trace_id, span_id, claude_session_id, project_path)
+
+        end_span(
+            trace_id, span_id,
+            status=status, usage=usage_dict, metadata=meta or None,
+            output=output[:4000] if output else None,
+        )
+        from factory.telemetry import flush as _flush
+        _flush()
+    except Exception:
+        logger.debug("Failed to complete span %s", span_id, exc_info=True)
 
 
 def _save_review(
@@ -299,6 +386,57 @@ def _save_review(
         logger.debug("Saved review output for %s to %s", role, review_path)
     except Exception:
         logger.debug("Failed to save review for %s", role, exc_info=True)
+
+
+def begin_cycle_session(
+    project_path: Path,
+    cycle_id: str | None = None,
+    model: str | None = None,
+) -> str | None:
+    """Create a root Langfuse trace for a factory cycle.
+
+    Sets FACTORY_TRACE_ID and FACTORY_PARENT_SPAN_ID env vars so child
+    agents link to this trace. Returns the span_id, or None if Langfuse
+    is not configured.
+    """
+    try:
+        from factory.telemetry import begin_trace, is_enabled
+
+        if not is_enabled():
+            return None
+        result = begin_trace(
+            project_path.name,
+            cycle_id or "unknown",
+            model=model,
+        )
+        if result is None:
+            return None
+        trace_id, span_id = result
+        os.environ["FACTORY_TRACE_ID"] = trace_id
+        os.environ["FACTORY_PARENT_SPAN_ID"] = span_id
+        return span_id
+    except Exception:
+        logger.debug("Failed to begin cycle trace", exc_info=True)
+        return None
+
+
+def complete_cycle_session(
+    project_path: Path,
+    span_id: str | None,
+) -> None:
+    """Mark a root Langfuse trace as finished and flush."""
+    if span_id is None:
+        return
+    try:
+        from factory.telemetry import end_trace, flush, is_enabled
+
+        if not is_enabled():
+            return
+        trace_id = os.environ.get("FACTORY_TRACE_ID", "")
+        end_trace(trace_id, span_id=span_id)
+        flush()
+    except Exception:
+        logger.debug("Failed to complete cycle trace", exc_info=True)
 
 
 async def invoke_agents_parallel(

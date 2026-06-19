@@ -2204,6 +2204,9 @@ def cmd_agent(args: argparse.Namespace) -> int:
     use_profile = getattr(args, "use_profile", False)
     tmux_persist = _resolve_tmux_persist(args)
     review_tag = getattr(args, "review_tag", None)
+    parent_span = getattr(args, "parent_session", None) or os.environ.get("FACTORY_PARENT_SPAN_ID")
+    if parent_span:
+        os.environ["FACTORY_PARENT_SPAN_ID"] = parent_span
 
     result, code = _run(invoke_agent(
         role,
@@ -4039,6 +4042,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Run agent interactively in a tmux window instead of headless (claude only)")
     p.add_argument("--review-tag", default=None,
                     help="Tag for distinct review output files (writes <role>-<tag>-latest.md)")
+    p.add_argument("--parent-session", default=None,
+                    help="Parent session ID for linking specialist sessions to a CEO cycle session")
 
     # ceo — launch the Factory CEO agent directly
     p = sub.add_parser("ceo", help="Launch the Factory CEO agent (interactive by default)")
