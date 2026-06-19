@@ -312,13 +312,13 @@ def ingest_transcript_to_span(
                     tool_use_id = tr["tool_use_id"]
                     if tool_use_id in pending_tools:
                         tool_obs = pending_tools.pop(tool_use_id)
-                        tool_obs.update(output=tr["content"][:4000])
+                        tool_obs.update(output=tr["content"])
                         tool_obs.end()
                         count += 1
                     else:
                         parent.create_event(
                             name="tool_output",
-                            output=tr["content"][:4000],
+                            output=tr["content"],
                             metadata={"tool_use_id": tool_use_id},
                         )
                         count += 1
@@ -328,7 +328,7 @@ def ingest_transcript_to_span(
                     if text.strip():
                         parent.create_event(
                             name="user_message",
-                            input=text[:4000],
+                            input=text,
                         )
                         count += 1
 
@@ -344,7 +344,7 @@ def ingest_transcript_to_span(
                         if text.strip():
                             parent.create_event(
                                 name="assistant_message",
-                                output=text[:4000],
+                                output=text,
                             )
                             count += 1
                     elif ptype == "tool_use":
@@ -366,7 +366,7 @@ def ingest_transcript_to_span(
                         if text.strip():
                             parent.create_event(
                                 name="thinking",
-                                output=text[:4000],
+                                output=text,
                             )
                             count += 1
 
@@ -382,12 +382,12 @@ def ingest_transcript_to_span(
                 if text.strip():
                     if tool_use_id and tool_use_id in pending_tools:
                         tool_obs = pending_tools.pop(tool_use_id)
-                        tool_obs.update(output=text[:4000])
+                        tool_obs.update(output=text)
                         tool_obs.end()
                     else:
                         parent.create_event(
                             name="tool_output",
-                            output=text[:4000],
+                            output=text,
                         )
                     count += 1
 
