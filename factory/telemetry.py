@@ -13,6 +13,7 @@ log = structlog.get_logger()
 
 try:
     from langfuse import Langfuse
+    from langfuse.types import TraceContext
 
     _HAS_LANGFUSE = True
 except ImportError:
@@ -50,8 +51,8 @@ def begin_trace(
     project_name: str,
     cycle_id: str | None = None,
     model: str | None = None,
-) -> str | None:
-    """Create a root trace (as a span observation) and return its ID."""
+) -> tuple[str, str] | None:
+    """Create a root trace span. Returns (trace_id, span_id) or None."""
     if not is_enabled():
         return None
     client = _get_client()
@@ -62,8 +63,8 @@ def begin_trace(
         metadata={"model": model, "project": project_name},
     )
     _observations[obs.id] = obs
-    log.debug("langfuse_trace_started", trace_id=obs.trace_id, obs_id=obs.id)
-    return obs.id
+    log.debug("langfuse_trace_started", trace_id=obs.trace_id, span_id=obs.id)
+    return (obs.trace_id, obs.id)
 
 
 def begin_span(
@@ -72,27 +73,35 @@ def begin_span(
     role: str,
     model: str | None = None,
 ) -> str | None:
-    """Create a child span under a parent and return its span_id."""
+    """Create a child span. Uses TraceContext for cross-process linking."""
     if not is_enabled():
         return None
-    parent = _observations.get(parent_span_id or trace_id)
-    if parent is None:
-        client = _get_client()
-        parent = client.start_observation(
+    client = _get_client()
+
+    parent = _observations.get(parent_span_id) if parent_span_id else None
+    if parent is not None:
+        obs = parent.start_observation(
             name=f"agent:{role}",
             as_type="span",
             metadata={"role": role, "model": model},
         )
-        _observations[parent.id] = parent
-        return parent.id
+    elif trace_id:
+        tc = TraceContext(trace_id=trace_id, parent_span_id=parent_span_id or "")
+        obs = client.start_observation(
+            trace_context=tc if parent_span_id else None,
+            name=f"agent:{role}",
+            as_type="span",
+            metadata={"role": role, "model": model},
+        )
+    else:
+        obs = client.start_observation(
+            name=f"agent:{role}",
+            as_type="span",
+            metadata={"role": role, "model": model},
+        )
 
-    obs = parent.start_observation(
-        name=f"agent:{role}",
-        as_type="span",
-        metadata={"role": role, "model": model},
-    )
     _observations[obs.id] = obs
-    log.debug("langfuse_span_started", span_id=obs.id, role=role)
+    log.debug("langfuse_span_started", span_id=obs.id, role=role, trace_id=obs.trace_id)
     return obs.id
 
 
@@ -140,15 +149,16 @@ def end_span(
     log.debug("langfuse_span_ended", span_id=span_id, status=status)
 
 
-def end_trace(trace_id: str) -> None:
-    """Mark a root trace as finished."""
-    if not is_enabled() or not trace_id:
+def end_trace(trace_id: str, span_id: str | None = None) -> None:
+    """Mark a root trace span as finished."""
+    if not is_enabled():
         return
-    obs = _observations.get(trace_id)
+    sid = span_id or trace_id
+    obs = _observations.get(sid)
     if obs is not None:
         obs.update(output={"status": "completed"})
         obs.end()
-        _observations.pop(trace_id, None)
+        _observations.pop(sid, None)
     log.debug("langfuse_trace_ended", trace_id=trace_id)
 
 
@@ -188,7 +198,7 @@ def ingest_transcript_to_span(
     """Parse a Claude Code JSONL transcript into Langfuse observations.
 
     Tool calls and their results are paired by tool_use_id into single
-    span observations.  Returns True if any observations were created.
+    tool observations.  Returns True if any observations were created.
     """
     if not is_enabled():
         return False

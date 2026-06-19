@@ -160,7 +160,7 @@ async def invoke_agent(
         started_data["review_tag"] = review_tag
     _emit_safe(project_path, "agent.started", agent=role, data=started_data)
 
-    sid = _begin_span_safe(role, model=model)
+    sid = _begin_span_safe(project_path, role, model=model)
 
     runner = get_runner(runner_name, project_path=project_path)
 
@@ -279,19 +279,25 @@ def _emit_safe(project_path: Path, event_type: str, **kwargs: object) -> None:
 
 
 def _begin_span_safe(
+    project_path: Path,
     role: str,
     *,
     model: str | None = None,
 ) -> str | None:
     """Begin a Langfuse span, swallowing errors so agent invocation is never blocked."""
     try:
-        from factory.telemetry import begin_span, is_enabled
+        from factory.telemetry import begin_span, begin_trace, is_enabled
 
         if not is_enabled():
             return None
         trace_id = os.environ.get("FACTORY_TRACE_ID")
         if not trace_id:
-            return None
+            result = begin_trace(project_path.name, cycle_id=f"standalone-{role}")
+            if result is None:
+                return None
+            trace_id, root_span_id = result
+            os.environ["FACTORY_TRACE_ID"] = trace_id
+            os.environ["FACTORY_PARENT_SPAN_ID"] = root_span_id
         parent_span_id = os.environ.get("FACTORY_PARENT_SPAN_ID")
         return begin_span(trace_id, parent_span_id, role, model=model)
     except Exception:
@@ -381,19 +387,26 @@ def begin_cycle_session(
 ) -> str | None:
     """Create a root Langfuse trace for a factory cycle.
 
-    Returns the trace_id to set as FACTORY_TRACE_ID, or None if
-    Langfuse is not configured.
+    Sets FACTORY_TRACE_ID and FACTORY_PARENT_SPAN_ID env vars so child
+    agents link to this trace. Returns the span_id, or None if Langfuse
+    is not configured.
     """
     try:
         from factory.telemetry import begin_trace, is_enabled
 
         if not is_enabled():
             return None
-        return begin_trace(
+        result = begin_trace(
             project_path.name,
             cycle_id or "unknown",
             model=model,
         )
+        if result is None:
+            return None
+        trace_id, span_id = result
+        os.environ["FACTORY_TRACE_ID"] = trace_id
+        os.environ["FACTORY_PARENT_SPAN_ID"] = span_id
+        return span_id
     except Exception:
         logger.debug("Failed to begin cycle trace", exc_info=True)
         return None
@@ -401,17 +414,18 @@ def begin_cycle_session(
 
 def complete_cycle_session(
     project_path: Path,
-    trace_id: str | None,
+    span_id: str | None,
 ) -> None:
     """Mark a root Langfuse trace as finished and flush."""
-    if trace_id is None:
+    if span_id is None:
         return
     try:
         from factory.telemetry import end_trace, flush, is_enabled
 
         if not is_enabled():
             return
-        end_trace(trace_id)
+        trace_id = os.environ.get("FACTORY_TRACE_ID", "")
+        end_trace(trace_id, span_id=span_id)
         flush()
     except Exception:
         logger.debug("Failed to complete cycle trace", exc_info=True)
