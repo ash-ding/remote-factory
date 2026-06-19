@@ -329,8 +329,8 @@ def _complete_span_safe(
         usage_dict: dict | None = None
         if usage is not None:
             usage_dict = {}
-            for key in ("input_tokens", "output_tokens", "total_cost_usd",
-                        "duration_ms", "num_turns", "model"):
+            for key in ("input_tokens", "output_tokens", "cache_read_tokens",
+                        "total_cost_usd", "duration_ms", "num_turns", "model"):
                 val = getattr(usage, key, None)
                 if val is not None:
                     usage_dict[key] = val

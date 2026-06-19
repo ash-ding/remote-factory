@@ -13,6 +13,7 @@ log = structlog.get_logger()
 
 try:
     from langfuse import Langfuse
+    from langfuse._client.attributes import LangfuseOtelSpanAttributes
     from langfuse.types import TraceContext
 
     _HAS_LANGFUSE = True
@@ -56,12 +57,19 @@ def begin_trace(
     if not is_enabled():
         return None
     client = _get_client()
+    trace_name = f"factory:{project_name}/{cycle_id or 'cycle'}"
     obs = client.start_observation(
-        name=f"factory:{project_name}/{cycle_id or 'cycle'}",
+        name=trace_name,
         as_type="span",
         input={"project": project_name, "cycle_id": cycle_id},
         metadata={"model": model, "project": project_name},
     )
+    try:
+        obs._otel_span.set_attributes({
+            LangfuseOtelSpanAttributes.TRACE_NAME: trace_name,
+        })
+    except Exception:
+        pass
     _observations[obs.id] = obs
     log.debug("langfuse_trace_started", trace_id=obs.trace_id, span_id=obs.id)
     return (obs.trace_id, obs.id)
@@ -86,9 +94,11 @@ def begin_span(
             metadata={"role": role, "model": model},
         )
     elif trace_id:
-        tc = TraceContext(trace_id=trace_id, parent_span_id=parent_span_id or "")
+        tc: TraceContext = {"trace_id": trace_id}
+        if parent_span_id:
+            tc["parent_span_id"] = parent_span_id
         obs = client.start_observation(
-            trace_context=tc if parent_span_id else None,
+            trace_context=tc,
             name=f"agent:{role}",
             as_type="span",
             metadata={"role": role, "model": model},
@@ -126,18 +136,19 @@ def end_span(
 
     usage_details: dict[str, int] = {}
     if usage is not None:
-        input_t = getattr(usage, "input_tokens", 0) or 0
-        output_t = getattr(usage, "output_tokens", 0) or 0
+        _g = usage.get if isinstance(usage, dict) else lambda k, d=None: getattr(usage, k, d)
+        input_t = _g("input_tokens", 0) or 0
+        output_t = _g("output_tokens", 0) or 0
         usage_details = {
             "input": input_t,
             "output": output_t,
-            "cache_read_input_tokens": getattr(usage, "cache_read_tokens", 0) or 0,
+            "cache_read_input_tokens": _g("cache_read_tokens", 0) or 0,
             "total": input_t + output_t,
         }
-        meta["total_cost_usd"] = getattr(usage, "total_cost_usd", 0.0) or 0.0
-        meta["duration_ms"] = getattr(usage, "duration_ms", 0.0) or 0.0
-        meta["num_turns"] = getattr(usage, "num_turns", 0) or 0
-        meta["model"] = getattr(usage, "model", None)
+        meta["total_cost_usd"] = _g("total_cost_usd", 0.0) or 0.0
+        meta["duration_ms"] = _g("duration_ms", 0.0) or 0.0
+        meta["num_turns"] = _g("num_turns", 0) or 0
+        meta["model"] = _g("model", None)
 
     obs.update(
         output=output,
@@ -313,7 +324,7 @@ def ingest_transcript_to_span(
                         if text.strip():
                             parent.create_event(
                                 name="thinking",
-                                metadata={"thinking": text[:4000]},
+                                output=text[:4000],
                             )
                             count += 1
 
