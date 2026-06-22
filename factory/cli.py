@@ -2374,20 +2374,29 @@ def cmd_ceo(args: argparse.Namespace) -> int:
 
         _print_banner("review")
 
+        repo_flag = f" --repo {repo}" if repo else ""
         repo_clause = f" in repo `{repo}`" if repo else ""
         task = (
             f"Project: {project_path}\nMode: review\n\n"
             f"## PR Review Directive\n\n"
+            f"This is a review-only run — no experiment lifecycle, no Builder iterations. "
+            f"QA runs once and reports findings. The CEO posts the verdict.\n\n"
             f"Review PR #{pr_number}{repo_clause}.\n\n"
-            f"1. Read the PR diff: `gh pr diff {pr_number}"
-            f"{' --repo ' + repo if repo else ''}`\n"
-            f"2. Read the PR description: `gh pr view {pr_number}"
-            f"{' --repo ' + repo if repo else ''}`\n"
-            f"3. Run the project's test suite and lint checks\n"
-            f"4. Spawn the QA agent for health check, code review, and adversarial QA\n"
-            f"5. Post your review verdict on the PR using "
-            f"`factory review --verdict <KEEP|REVERT> --pr {pr_number}"
-            f"{' --repo ' + repo if repo else ''}`\n"
+            f"1. **Baseline eval** — run `factory eval \"{project_path}\"` "
+            f"to establish $SCORE_BEFORE\n"
+            f"2. **Step 2c-qa** (QA Agent Verification) — single pass, "
+            f"QA iteration 1/1, no Builder fix iterations. "
+            f"Spawn the QA agent to read the PR diff "
+            f"(`gh pr diff {pr_number}{repo_flag}`), "
+            f"run health check, code review, and adversarial QA\n"
+            f"3. **Step 2d** (Hard Precheck Gate) — run "
+            f"`factory precheck \"{project_path}\" "
+            f"--score-before $SCORE_BEFORE --score-after $SCORE_AFTER"
+            f"{repo_flag}`\n"
+            f"4. **Post verdict** — run "
+            f"`factory review --verdict <KEEP|REVERT> --pr {pr_number} "
+            f"--score-before $SCORE_BEFORE --score-after $SCORE_AFTER"
+            f"{repo_flag}`\n"
         )
 
         if not headless:
