@@ -4,8 +4,9 @@
 <!-- Fill in each section below. -->
 
 ## Goal
+<!-- A single sentence describing what this project should achieve. -->
 
-Domain-agnostic multi-agent software evolution loop that can auto-discover evals and continuously improve any software project.
+A CLI framework that orchestrates autonomous software evolution through specialist agents, systematic experimentation, and eval-driven keep/revert decisions.
 
 ## Scope
 
@@ -14,29 +15,14 @@ Domain-agnostic multi-agent software evolution loop that can auto-discover evals
 <!-- One path per line. Glob patterns are supported. -->
 
 - factory/**/*.py
-- factory/agents/prompts/*.md
-- factory/agents/agents.yml
-- factory/dashboard/static/*
 - tests/**/*.py
-- templates/**
-- README.md
-- docs/**
-- .github/workflows/*.yml
-- factory.md
-- CLAUDE.md
-- README.md
-- pyproject.toml
-- codecov.yml
-- .agents/**
-- .codex-plugin/**
-- AGENTS.md
-- scripts/**
-- eval/**
-- factory.md
-- .sentrux/**
 
 ### Read-only
 <!-- Files the factory may read but must never modify. -->
+
+- README.md
+- pyproject.toml
+- eval/score.py
 
 ## Guards
 <!-- Rules the factory must never violate. Checked before every commit. -->
@@ -44,7 +30,6 @@ Domain-agnostic multi-agent software evolution loop that can auto-discover evals
 - Do not delete or overwrite existing tests
 - Do not modify files outside the declared scope
 - Do not introduce secrets or credentials into the repository
-- Do not modify test fixtures that other tests depend on
 
 ## Eval
 
@@ -53,41 +38,49 @@ Domain-agnostic multi-agent software evolution loop that can auto-discover evals
 <!-- It must output JSON to stdout matching the EvalResult format. -->
 
 ```bash
+python eval/score.py
 ```
 
 ### Threshold
 <!-- Minimum composite score (0.0-1.0) required to keep a change. -->
 
-0.6
+0.3
 
 ## Target Branch
+<!-- Branch that experiment PRs target. Default: main -->
+<!-- Set to a different branch (e.g. factory/dev) to stage factory changes before merging to main -->
 
 main
 
 ## Project Eval
-<!-- No project-specific eval dimensions for the factory itself -->
-<!-- The factory uses the standard hygiene + growth eval framework -->
+<!-- User-defined project-specific eval dimensions (benchmarks, accuracy, latency, etc.) -->
+<!-- Each dimension starts with '- name:' followed by indented key: value lines -->
+<!-- Output format: JSON with {"score": 0.0-1.0} or exit code (0=pass, non-zero=fail) -->
+<!-- Example:
+- name: benchmark_accuracy
+  command: python eval/benchmark.py
+  parse: json
+  weight: 0.5
+  timeout: 300
+  description: Run benchmark suite and report accuracy
+-->
 
 ## Eval Weights
-<!-- Using defaults: 50/50 hygiene/growth (no project eval) -->
-
-## Hypothesis Budget
-<!-- Controls how many hypotheses the Strategist generates per cycle. -->
-<!-- These are defaults — override per-run with --min-growth, --max-new -->
-
-- min_growth: 2
-- max_new: 2
+<!-- Weight distribution across eval tiers (must sum to 1.0) -->
+<!-- Only needed when Project Eval dimensions are defined -->
+<!-- Default without project eval: hygiene 0.50, growth 0.50 -->
+<!-- Default with project eval: hygiene 0.30, growth 0.20, project 0.50 -->
+<!-- Example:
+- hygiene: 0.25
+- growth: 0.25
+- project: 0.50
+-->
 
 ## Smoke Test
-<!-- Optional e2e smoke test command. Failure = mandatory revert. -->
 
 ```bash
-uv run pytest tests/test_models.py tests/test_guards.py tests/test_runners.py -x -q --tb=short -k 'not (BobAuth or preflight_error_unchanged)'
+factory --help
 ```
-
-## Test Timeout
-
-600
 
 ## Constraints
 <!-- Soft rules that guide behavior but don't block commits. -->
@@ -95,3 +88,44 @@ uv run pytest tests/test_models.py tests/test_guards.py tests/test_runners.py -x
 - Prefer small, incremental changes over large rewrites
 - Each change should be accompanied by at least one test
 - Follow the existing code style and conventions
+
+## Research Target
+<!-- Only for research/benchmark projects. Define the metric to improve. -->
+<!-- Example:
+- objective: maximize SWE-bench resolve rate
+- metric: resolved/total
+- target: 0.35
+- run_command: python run_benchmark.py
+- result_path: results/output.json
+- result_parser: json
+- timeout: 3600
+-->
+
+## Mutable Surfaces
+<!-- Files the Builder is allowed to modify during research experiments. -->
+<!-- One glob pattern per line. Only used in research mode. -->
+<!-- Example:
+- src/**/*.py
+- config/*.yaml
+-->
+
+## Fixed Surfaces
+<!-- Ground truth files, test data, eval infrastructure. -->
+<!-- These files are fingerprinted for leakage detection and MUST NOT be modified. -->
+<!-- One glob pattern per line. Only used in research mode. -->
+<!-- Example:
+- tests/gold/*.json
+- eval/**/*.py
+- data/benchmark/*.jsonl
+-->
+
+## Research Constraints
+<!-- Additional rules for the research loop. Only used in research mode. -->
+<!-- Example:
+- Do not use GPT-4 (cost constraint)
+- Each experiment must complete within 30 minutes
+-->
+
+## Cost Budget
+<!-- Per-cycle or total budget constraints for research experiments. -->
+<!-- Example: $5/cycle, $50 total -->
