@@ -20,8 +20,6 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger()
 
-_CEO_MESSAGE_MAX_CHARS = 500
-
 
 def _make_ceo_message_emitter(project_path: Path) -> Callable[[bytes], None]:
     """Return a callback that emits ceo.message events for assistant JSONL lines."""
@@ -37,12 +35,11 @@ def _make_ceo_message_emitter(project_path: Path) -> Callable[[bytes], None]:
         message = parsed.get("message", "")
         if not isinstance(message, str) or not message:
             return
-        truncated = message[:_CEO_MESSAGE_MAX_CHARS]
         emit_event(
             project_path,
             "ceo.message",
             agent="ceo",
-            data={"message": truncated, "message_type": "assistant"},
+            data={"message": message, "message_type": "assistant"},
         )
 
     return _on_line

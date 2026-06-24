@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from factory.runners.claude import _CEO_MESSAGE_MAX_CHARS, _make_ceo_message_emitter
+from factory.runners.claude import _make_ceo_message_emitter
 
 
 class TestMakeCeoMessageEmitter:
@@ -56,19 +56,19 @@ class TestMakeCeoMessageEmitter:
         events_file = project / ".factory" / "events.jsonl"
         assert not events_file.exists()
 
-    def test_truncates_long_messages(self, tmp_path: Path) -> None:
+    def test_preserves_long_messages(self, tmp_path: Path) -> None:
         project = tmp_path / "proj"
         project.mkdir()
         (project / ".factory").mkdir()
 
         emitter = _make_ceo_message_emitter(project)
-        long_msg = "x" * 1000
+        long_msg = "x" * 5000
         line = json.dumps({"type": "assistant", "message": long_msg}).encode()
         emitter(line)
 
         events_file = project / ".factory" / "events.jsonl"
         event = json.loads(events_file.read_text().strip())
-        assert len(event["data"]["message"]) == _CEO_MESSAGE_MAX_CHARS
+        assert event["data"]["message"] == long_msg
 
     def test_skips_empty_message(self, tmp_path: Path) -> None:
         project = tmp_path / "proj"
