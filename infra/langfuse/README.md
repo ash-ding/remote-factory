@@ -9,7 +9,12 @@ Langfuse provides LLM observability and tracing for the factory system.
 cd infra/langfuse && docker compose up -d
 ```
 
-2. Run the factory with Langfuse tracing enabled:
+2. Install the telemetry dependency group (one-time):
+```bash
+uv sync --extra telemetry
+```
+
+3. Run the factory with Langfuse tracing enabled:
 
 ```bash
 export LANGFUSE_HOST=http://localhost:3000
