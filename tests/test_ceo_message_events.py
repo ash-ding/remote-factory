@@ -193,3 +193,62 @@ class TestCeoCallbackWiring:
 
             call_kwargs = mock_run.call_args[1]
             assert call_kwargs["on_line"] is None
+
+
+class TestTeeStreamOnLineCallback:
+    """Test that tee_stream invokes the on_line callback for each line."""
+
+    async def test_on_line_callback_invoked_for_each_line(self) -> None:
+        """The on_line callback is called with raw bytes for each line."""
+        import asyncio
+        import io
+
+        from factory.runners._stream import tee_stream
+
+        # Create a mock stream reader with test data
+        lines = [b"line one\n", b"line two\n", b"line three\n"]
+        reader = asyncio.StreamReader()
+        for line in lines:
+            reader.feed_data(line)
+        reader.feed_eof()
+
+        buffer: list[bytes] = []
+        captured_lines: list[bytes] = []
+
+        def on_line_callback(line: bytes) -> None:
+            captured_lines.append(line)
+
+        dest = io.BytesIO()
+
+        await tee_stream(
+            reader,
+            dest,
+            buffer,
+            stream=False,
+            on_line=on_line_callback,
+        )
+
+        assert len(captured_lines) == 3
+        assert captured_lines[0] == b"line one\n"
+        assert captured_lines[1] == b"line two\n"
+        assert captured_lines[2] == b"line three\n"
+        assert buffer == captured_lines  # Buffer should match
+
+    async def test_on_line_none_does_not_crash(self) -> None:
+        """When on_line is None, tee_stream works normally without calling anything."""
+        import asyncio
+        import io
+
+        from factory.runners._stream import tee_stream
+
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"test line\n")
+        reader.feed_eof()
+
+        buffer: list[bytes] = []
+        dest = io.BytesIO()
+
+        await tee_stream(reader, dest, buffer, stream=False, on_line=None)
+
+        assert len(buffer) == 1
+        assert buffer[0] == b"test line\n"
