@@ -1,68 +1,57 @@
 #!/usr/bin/env python3
-"""Analyze a Langfuse factory trace: extract per-agent time & output token breakdown,
-generate pie charts and gantt timeline, and produce a friction analysis.
+"""Analyze a Langfuse factory trace: per-agent time & output token breakdown,
+pie charts, and swim-lane Gantt timeline.
+
+Attributes each observation to an agent role by walking the Langfuse parent
+chain (not by timestamp overlap), so overlapping agent spans are handled
+correctly.
+
+Output tokens are estimated as (assistant_message chars + thinking chars) / 4
+because the current Langfuse setup does not record per-observation token counts.
 
 Usage:
-    python scripts/analyze_trace.py <trace_id> [--output-dir DIR]
+    python scripts/analyze_trace.py <trace_id> [-o OUTPUT_DIR]
+    python scripts/analyze_trace.py <trace_id> --no-cache --title "My Project"
+
+Requires .env.local with LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY.
+Requires matplotlib for chart generation (pip install matplotlib).
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from collections import defaultdict
-from datetime import datetime
 from pathlib import Path
 
-import requests
-from dotenv import load_dotenv
+from langfuse_client import (
+    fetch_trace,
+    find_ancestor_agent,
+    get_agent_spans,
+    parse_ts,
+)
+
+AGENT_COLORS = {
+    "ceo": "#2196F3",
+    "builder": "#4CAF50",
+    "qa": "#FF9800",
+    "researcher": "#9C27B0",
+    "strategist": "#F44336",
+    "archivist": "#607D8B",
+    "refiner": "#00BCD4",
+    "failure_analyst": "#795548",
+}
 
 
-def load_creds():
-    for p in [".env.local", ".env"]:
-        if Path(p).exists():
-            load_dotenv(p, override=True)
-    host = (os.environ.get("LANGFUSE_HOST") or os.environ.get("LANGFUSE_BASE_URL", "http://localhost:3000")).rstrip("/")
-    pk = os.environ["LANGFUSE_PUBLIC_KEY"]
-    sk = os.environ["LANGFUSE_SECRET_KEY"]
-    return host, pk, sk
+def analyze(trace: dict) -> tuple[list[dict], list[dict]]:
+    """Extract per-agent token and timing breakdown from a trace.
 
-
-def fetch_trace(host, pk, sk, trace_id):
-    r = requests.get(f"{host}/api/public/traces/{trace_id}", auth=(pk, sk), timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-
-def parse_ts(ts):
-    if not ts:
-        return None
-    for fmt in ["%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"]:
-        try:
-            return datetime.strptime(ts, fmt)
-        except ValueError:
-            pass
-    return None
-
-
-def analyze(trace):
+    Returns (results, timeline) where:
+      - results: per-role aggregates (output_chars, thinking_chars, est_output_tokens, duration_s)
+      - timeline: per-span entries for the Gantt chart
+    """
     observations = trace["observations"]
     obs_by_id = {o["id"]: o for o in observations}
-
-    # Walk parent chain to find the nearest agent:* ancestor (excluding agent:ceo)
-    def find_ancestor_agent(obs_id, depth=0):
-        if depth > 20:
-            return None
-        obs = obs_by_id.get(obs_id)
-        if not obs:
-            return None
-        if obs["type"] == "SPAN" and obs["name"].startswith("agent:") and obs["name"] != "agent:ceo":
-            return obs
-        pid = obs.get("parentObservationId")
-        if pid:
-            return find_ancestor_agent(pid, depth + 1)
-        return None
 
     # Attribute each observation to an agent role via parent chain
     role_output = defaultdict(int)
@@ -70,7 +59,7 @@ def analyze(trace):
     role_tool_output = defaultdict(int)
 
     for o in observations:
-        ancestor = find_ancestor_agent(o["id"])
+        ancestor = find_ancestor_agent(o["id"], obs_by_id)
         role = ancestor["name"].replace("agent:", "") if ancestor else "ceo"
 
         if o["type"] == "EVENT":
@@ -89,13 +78,7 @@ def analyze(trace):
             role_tool_output[role] += len(str(out))
 
     # Agent spans for timing
-    agent_spans = sorted(
-        [o for o in observations
-         if o["type"] == "SPAN"
-         and o["name"].startswith("agent:")
-         and o["name"] != "agent:ceo"],
-        key=lambda o: o.get("startTime", ""),
-    )
+    agent_spans = get_agent_spans(observations)
 
     role_duration = defaultdict(float)
     role_count = defaultdict(int)
@@ -139,10 +122,9 @@ def analyze(trace):
             "est_output_tokens": est_tok,
             "duration_s": round(role_duration.get(role, 0), 1),
         })
-
     results.sort(key=lambda r: -r["est_output_tokens"])
 
-    # Detailed timeline for gantt chart
+    # Timeline for Gantt chart
     timeline = []
     for i, s in enumerate(agent_spans):
         role = s["name"].replace("agent:", "")
@@ -160,7 +142,8 @@ def analyze(trace):
     return results, timeline
 
 
-def make_plots(results, output_dir):
+def make_pie_charts(results: list[dict], output_dir: str, title: str = "") -> Path:
+    """Generate side-by-side pie charts for token and time distribution."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -170,29 +153,20 @@ def make_plots(results, output_dir):
     durations = [r["duration_s"] for r in results]
     counts = [r["count"] for r in results]
 
-    colors = {
-        "ceo": "#2196F3",
-        "builder": "#4CAF50",
-        "qa": "#FF9800",
-        "researcher": "#9C27B0",
-        "strategist": "#F44336",
-        "archivist": "#607D8B",
-    }
-    color_list = [colors.get(r, "#999999") for r in roles]
-
+    color_list = [AGENT_COLORS.get(r, "#999999") for r in roles]
     labels_tok = [f"{r} (x{c})\n~{t:,} tok" for r, t, c in zip(roles, tokens, counts)]
     labels_dur = [f"{r} (x{c})\n{d:.0f}s" for r, d, c in zip(roles, durations, counts)]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
 
-    wedges1, texts1, autotexts1 = ax1.pie(
+    ax1.pie(
         tokens, labels=labels_tok, colors=color_list,
         autopct="%1.1f%%", pctdistance=0.75, startangle=90,
         textprops={"fontsize": 9},
     )
     ax1.set_title("Estimated Output Tokens\nby Agent Role", fontsize=13, fontweight="bold", pad=15)
 
-    wedges2, texts2, autotexts2 = ax2.pie(
+    ax2.pie(
         durations, labels=labels_dur, colors=color_list,
         autopct="%1.1f%%", pctdistance=0.75, startangle=90,
         textprops={"fontsize": 9},
@@ -201,8 +175,9 @@ def make_plots(results, output_dir):
 
     total_tok = sum(tokens)
     total_dur = sum(durations)
+    trace_title = title or "Factory Trace"
     fig.suptitle(
-        f"Factory Trace: snake-test-v3/design\n~{total_tok:,} est. output tokens, {total_dur/60:.0f}min active",
+        f"{trace_title}\n~{total_tok:,} est. output tokens, {total_dur/60:.0f}min active",
         fontsize=14, fontweight="bold", y=1.02,
     )
 
@@ -210,24 +185,16 @@ def make_plots(results, output_dir):
     out_path = Path(output_dir) / "trace_breakdown.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"Saved chart to {out_path}", file=sys.stderr)
+    print(f"Saved pie chart to {out_path}", file=sys.stderr)
     return out_path
 
 
-def make_timeline_chart(timeline, output_dir):
+def make_gantt_chart(timeline: list[dict], output_dir: str, title: str = "") -> Path | None:
+    """Generate a swim-lane Gantt chart with one row per agent role."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
-
-    colors = {
-        "ceo": "#2196F3",
-        "builder": "#4CAF50",
-        "qa": "#FF9800",
-        "researcher": "#9C27B0",
-        "strategist": "#F44336",
-        "archivist": "#607D8B",
-    }
 
     if not timeline:
         return None
@@ -236,7 +203,16 @@ def make_timeline_chart(timeline, output_dir):
     if not base_time:
         return None
 
-    fig, ax = plt.subplots(figsize=(18, 4))
+    # Determine swim lanes from the roles present
+    role_order = ["researcher", "strategist", "builder", "qa", "archivist",
+                  "refiner", "failure_analyst"]
+    present_roles = []
+    for r in role_order:
+        if any(e["role"] == r for e in timeline):
+            present_roles.append(r)
+    y_positions = {role: i for i, role in enumerate(reversed(present_roles))}
+
+    fig, ax = plt.subplots(figsize=(20, max(3, len(present_roles) * 1.2 + 1)))
 
     for entry in timeline:
         start = parse_ts(entry["start"])
@@ -245,37 +221,58 @@ def make_timeline_chart(timeline, output_dir):
             continue
         x_start = (start - base_time).total_seconds() / 60
         width = (end - start).total_seconds() / 60
-        color = colors.get(entry["role"], "#999999")
-        ax.barh(0.5, width, left=x_start, height=0.6, color=color, edgecolor="white", linewidth=0.5)
-        if width > 0.3:
-            label = entry["role"]
-            if len(label) > 6:
-                label = label[:6]
-            ax.text(x_start + width / 2, 0.5, f"{label}\n{entry['duration_s']:.0f}s",
-                    ha="center", va="center", fontsize=5.5, fontweight="bold", color="white")
+        role = entry["role"]
+        y = y_positions.get(role, -1)
+        if y < 0:
+            continue
+        color = AGENT_COLORS.get(role, "#999999")
+        ax.barh(y, width, left=x_start, height=0.7, color=color,
+                edgecolor="white", linewidth=1, alpha=0.85)
+        if width > 0.6:
+            ax.text(x_start + width / 2, y, f"{entry['duration_s']:.0f}s",
+                    ha="center", va="center", fontsize=7, fontweight="bold", color="white")
 
     ax.set_xlabel("Minutes from cycle start", fontsize=11)
-    ax.set_yticks([])
-    ax.set_title("Agent Execution Timeline", fontsize=13, fontweight="bold")
+    ax.set_yticks(list(y_positions.values()))
+    ax.set_yticklabels([r.capitalize() for r in reversed(present_roles)], fontsize=10)
 
-    legend_patches = [mpatches.Patch(color=c, label=r) for r, c in colors.items()]
-    ax.legend(handles=legend_patches, loc="upper right", fontsize=9, ncol=6)
+    trace_title = title or "Agent Execution Timeline"
+    ax.set_title(trace_title, fontsize=13, fontweight="bold")
+
+    max_x = max(
+        (parse_ts(t["end"]) - base_time).total_seconds() / 60
+        for t in timeline if parse_ts(t["end"])
+    )
+    ax.set_xlim(-0.5, max_x + 0.5)
+    ax.grid(axis="x", alpha=0.3)
+    ax.invert_yaxis()
+
+    legend_patches = [
+        mpatches.Patch(color=AGENT_COLORS.get(r, "#999"), label=r.capitalize())
+        for r in present_roles
+    ]
+    ax.legend(handles=legend_patches, loc="upper right", fontsize=9,
+              ncol=min(len(present_roles), 6))
 
     plt.tight_layout()
     out_path = Path(output_dir) / "trace_timeline.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"Saved timeline to {out_path}", file=sys.stderr)
+    print(f"Saved Gantt chart to {out_path}", file=sys.stderr)
     return out_path
 
 
-def print_table(results):
+def print_table(results: list[dict]):
+    """Print a formatted table of per-agent token/time breakdown."""
     header = "Role            #  AssistOut   Thinking   ~OutTok   Duration   ToolOut"
     print(header)
     print("-" * len(header))
     for r in results:
-        print(f"{r['role']:<15} {r['count']:>2} {r['output_chars']:>10,} {r['thinking_chars']:>10,} "
-              f"{r['est_output_tokens']:>9,} {r['duration_s']:>9.0f}s {r['tool_output_chars']:>9,}")
+        print(
+            f"{r['role']:<15} {r['count']:>2} {r['output_chars']:>10,} "
+            f"{r['thinking_chars']:>10,} {r['est_output_tokens']:>9,} "
+            f"{r['duration_s']:>9.0f}s {r['tool_output_chars']:>9,}"
+        )
     total_tok = sum(r["est_output_tokens"] for r in results)
     total_dur = sum(r["duration_s"] for r in results)
     print("-" * len(header))
@@ -283,29 +280,35 @@ def print_table(results):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("trace_id")
-    parser.add_argument("--output-dir", "-o", default=".")
+    parser = argparse.ArgumentParser(
+        description="Analyze a Langfuse factory trace: token/time breakdown + charts"
+    )
+    parser.add_argument("trace_id", help="Langfuse trace ID")
+    parser.add_argument("--output-dir", "-o", default=".", help="Directory for charts and JSON")
+    parser.add_argument("--title", "-t", default="", help="Title for charts (default: trace name)")
+    parser.add_argument("--no-cache", action="store_true", help="Force fresh fetch from Langfuse")
+    parser.add_argument("--no-charts", action="store_true", help="Skip chart generation")
     args = parser.parse_args()
 
-    host, pk, sk = load_creds()
-    trace = fetch_trace(host, pk, sk, args.trace_id)
+    trace = fetch_trace(args.trace_id, use_cache=not args.no_cache)
+    title = args.title or trace.get("name", "Factory Trace")
 
     results, timeline = analyze(trace)
     print_table(results)
 
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    with open(Path(args.output_dir) / "trace_breakdown.json", "w") as f:
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(out_dir / "trace_breakdown.json", "w") as f:
         json.dump({"results": results, "timeline": timeline}, f, indent=2)
+    print(f"\nSaved JSON to {out_dir / 'trace_breakdown.json'}", file=sys.stderr)
 
-    try:
-        pie_path = make_plots(results, args.output_dir)
-        gantt_path = make_timeline_chart(timeline, args.output_dir)
-    except ImportError:
-        print("matplotlib not installed - skipping charts", file=sys.stderr)
-        pie_path = gantt_path = None
-
-    return results, timeline, pie_path, gantt_path
+    if not args.no_charts:
+        try:
+            make_pie_charts(results, str(out_dir), title=title)
+            make_gantt_chart(timeline, str(out_dir), title=f"{title} — Timeline")
+        except ImportError:
+            print("matplotlib not installed — skipping charts (pip install matplotlib)", file=sys.stderr)
 
 
 if __name__ == "__main__":

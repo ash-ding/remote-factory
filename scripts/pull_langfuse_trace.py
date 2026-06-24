@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """Pull a Langfuse trace and extract the factory orchestration timeline.
 
+Produces three views:
+  1. Agent orchestration timeline (spans, durations, child counts)
+  2. CEO reasoning log (assistant messages from the CEO agent)
+  3. Factory CLI commands (factory agent/begin/finalize/precheck/review calls)
+
 Usage:
-    python scripts/pull_langfuse_trace.py <trace_id> [--output FILE] [--full]
+    python scripts/pull_langfuse_trace.py <trace_id> [--output FILE] [--full] [--json]
+    python scripts/pull_langfuse_trace.py <trace_id> --no-cache   # force fresh fetch
 
 Requires .env.local with LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY.
 """
@@ -10,70 +16,29 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-from datetime import datetime
-from pathlib import Path
 
-import requests
-from dotenv import load_dotenv
-
-
-def load_creds() -> tuple[str, str, str]:
-    for p in [".env.local", ".env"]:
-        if Path(p).exists():
-            load_dotenv(p, override=True)
-    host = os.environ.get("LANGFUSE_HOST") or os.environ.get("LANGFUSE_BASE_URL", "http://localhost:3000")
-    pk = os.environ["LANGFUSE_PUBLIC_KEY"]
-    sk = os.environ["LANGFUSE_SECRET_KEY"]
-    return host.rstrip("/"), pk, sk
+from langfuse_client import (
+    fetch_trace,
+    find_ancestor_agent,
+    get_agent_spans,
+    parse_ts,
+    truncate,
+)
 
 
-def fetch_trace(host: str, pk: str, sk: str, trace_id: str) -> dict:
-    url = f"{host}/api/public/traces/{trace_id}"
-    r = requests.get(url, auth=(pk, sk), timeout=30)
-    r.raise_for_status()
-    return r.json()
+def extract_orchestration(trace: dict, full: bool = False) -> tuple[list[dict], list[dict]]:
+    """Extract the high-level orchestration timeline from a trace.
 
-
-def parse_timestamp(ts: str | None) -> datetime | None:
-    if not ts:
-        return None
-    for fmt in ["%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"]:
-        try:
-            return datetime.strptime(ts, fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def truncate(text: str | None, limit: int = 500) -> str:
-    if not text:
-        return "(empty)"
-    s = str(text).replace("\n", " ").strip()
-    if len(s) > limit:
-        return s[:limit] + "..."
-    return s
-
-
-def extract_orchestration(trace: dict, full: bool = False) -> list[dict]:
-    """Extract the high-level orchestration timeline from a trace."""
+    Returns (timeline, ceo_reasoning) where:
+      - timeline[0] is trace-level metadata
+      - timeline[1:] are agent span entries
+      - ceo_reasoning is a list of CEO assistant messages with timestamps
+    """
     observations = trace.get("observations", [])
+    obs_by_id = {o["id"]: o for o in observations}
 
-    obs_by_id: dict[str, dict] = {}
-    for obs in observations:
-        obs_by_id[obs["id"]] = obs
-
-    spans = sorted(
-        [o for o in observations if o["type"] == "SPAN"],
-        key=lambda o: o.get("startTime", ""),
-    )
-
-    ceo_span_id = None
-    for s in spans:
-        if s["name"] == "agent:ceo":
-            ceo_span_id = s["id"]
-            break
+    agent_spans = get_agent_spans(observations)
 
     timeline = []
 
@@ -87,58 +52,48 @@ def extract_orchestration(trace: dict, full: bool = False) -> list[dict]:
         "total_observations": len(observations),
     })
 
-    # Agent spans (direct children of CEO)
-    agent_spans = sorted(
-        [s for s in spans if s.get("parentObservationId") == ceo_span_id and s["name"] != "agent:ceo"],
-        key=lambda s: s.get("startTime", ""),
-    )
-
+    # Agent spans with child observation counts
     for span in agent_spans:
-        start = parse_timestamp(span.get("startTime"))
-        end = parse_timestamp(span.get("endTime"))
+        start = parse_ts(span.get("startTime"))
+        end = parse_ts(span.get("endTime"))
         duration = (end - start).total_seconds() if start and end else None
 
-        # Find child observations for this agent span
         children = [o for o in observations if o.get("parentObservationId") == span["id"]]
         tool_calls = [c for c in children if c["type"] == "TOOL"]
-        messages = [c for c in children if c["type"] == "EVENT"]
+        events = [c for c in children if c["type"] == "EVENT"]
 
         input_text = ""
-        output_text = ""
         if span.get("input"):
             inp = span["input"]
-            if isinstance(inp, dict):
-                input_text = inp.get("task", inp.get("prompt", json.dumps(inp)[:2000]))
-            else:
-                input_text = str(inp)
+            input_text = inp.get("task", inp.get("prompt", json.dumps(inp)[:2000])) if isinstance(inp, dict) else str(inp)
 
+        output_text = ""
         if span.get("output"):
             out = span["output"]
-            if isinstance(out, dict):
-                output_text = json.dumps(out)
-            else:
-                output_text = str(out)
+            output_text = json.dumps(out) if isinstance(out, dict) else str(out)
 
         limit = 3000 if full else 500
-        entry = {
+        timeline.append({
             "type": "agent",
             "name": span["name"],
             "start": span.get("startTime", "")[:19],
             "end": span.get("endTime", "")[:19] if span.get("endTime") else "running",
             "duration_s": round(duration, 1) if duration else None,
             "tool_calls": len(tool_calls),
-            "events": len(messages),
+            "events": len(events),
             "input_summary": truncate(input_text, limit),
             "output_summary": truncate(output_text, limit),
-        }
-        timeline.append(entry)
+        })
 
-    # CEO's own assistant_message events (between agent spans) — these show the CEO's reasoning
+    # CEO reasoning: assistant_message events that belong to the CEO
+    # (i.e., their ancestor agent is None — they're parented to the CEO span)
     ceo_messages = sorted(
-        [o for o in observations
-         if o["type"] == "EVENT"
-         and o.get("name") == "assistant_message"
-         and o.get("parentObservationId") == ceo_span_id],
+        [
+            o for o in observations
+            if o["type"] == "EVENT"
+            and o.get("name") == "assistant_message"
+            and find_ancestor_agent(o["id"], obs_by_id) is None
+        ],
         key=lambda o: o.get("startTime", ""),
     )
 
@@ -158,7 +113,55 @@ def extract_orchestration(trace: dict, full: bool = False) -> list[dict]:
     return timeline, ceo_reasoning
 
 
-def print_report(timeline: list[dict], ceo_reasoning: list[dict], file=sys.stdout):
+def extract_factory_commands(trace: dict) -> list[dict]:
+    """Extract factory CLI commands (factory agent/begin/finalize/etc.) from CEO tool calls.
+
+    Returns a list of {timestamp, command, output_preview} dicts, sorted by time.
+    These show the CEO's actual orchestration actions.
+    """
+    observations = trace.get("observations", [])
+    obs_by_id = {o["id"]: o for o in observations}
+
+    FACTORY_KEYWORDS = [
+        "factory agent", "factory begin", "factory finalize",
+        "factory eval", "factory precheck", "factory review",
+        "factory log", "factory study", "factory guard",
+        "factory backlog", "factory init", "factory detect",
+    ]
+
+    commands = []
+    for o in sorted(observations, key=lambda x: x.get("startTime", "")):
+        if o["type"] != "TOOL" or o.get("name") != "tool:Bash":
+            continue
+        # Only include CEO-level commands (no agent ancestor)
+        if find_ancestor_agent(o["id"], obs_by_id) is not None:
+            continue
+
+        inp = o.get("input", {})
+        cmd = inp.get("command", str(inp)) if isinstance(inp, dict) else str(inp)
+
+        if not any(kw in cmd for kw in FACTORY_KEYWORDS):
+            continue
+
+        output = o.get("output", "") or ""
+        if isinstance(output, dict):
+            output = json.dumps(output)
+
+        commands.append({
+            "timestamp": o.get("startTime", "")[:19],
+            "command": cmd[:800],
+            "output_preview": truncate(str(output), 300),
+        })
+
+    return commands
+
+
+def print_report(
+    timeline: list[dict],
+    ceo_reasoning: list[dict],
+    factory_commands: list[dict],
+    file=sys.stdout,
+):
     """Print a human-readable orchestration report."""
     p = lambda *a, **kw: print(*a, **kw, file=file)
 
@@ -176,13 +179,20 @@ def print_report(timeline: list[dict], ceo_reasoning: list[dict], file=sys.stdou
         if entry["type"] != "agent":
             continue
         p(f"### [{i}] {entry['name']}")
-        p(f"    Time:  {entry['start']} → {entry['end']} ({entry['duration_s']}s)")
+        p(f"    Time:  {entry['start']} -> {entry['end']} ({entry['duration_s']}s)")
         p(f"    Tools: {entry['tool_calls']} calls, {entry['events']} events")
         p(f"    Input:  {entry['input_summary'][:200]}")
         p(f"    Output: {entry['output_summary'][:200]}")
         p()
 
-    p("\n## CEO REASONING (assistant messages between agent calls)\n")
+    p("\n## FACTORY CLI COMMANDS (CEO orchestration actions)\n")
+    for cmd in factory_commands:
+        p(f"[{cmd['timestamp']}]")
+        p(f"  $ {cmd['command'][:400]}")
+        p(f"  -> {cmd['output_preview'][:200]}")
+        p()
+
+    p("\n## CEO REASONING (assistant messages)\n")
     for msg in ceo_reasoning[:50]:
         p(f"[{msg['timestamp']}] {msg['text']}")
         p()
@@ -194,19 +204,23 @@ def main():
     parser.add_argument("--output", "-o", help="Output file (default: stdout)")
     parser.add_argument("--full", action="store_true", help="Include full input/output text (not truncated)")
     parser.add_argument("--json", action="store_true", help="Output as JSON instead of human-readable")
+    parser.add_argument("--no-cache", action="store_true", help="Force fresh fetch from Langfuse (skip cache)")
     args = parser.parse_args()
 
-    host, pk, sk = load_creds()
-    trace = fetch_trace(host, pk, sk, args.trace_id)
-
+    trace = fetch_trace(args.trace_id, use_cache=not args.no_cache)
     timeline, ceo_reasoning = extract_orchestration(trace, full=args.full)
+    factory_commands = extract_factory_commands(trace)
 
     out_file = open(args.output, "w") if args.output else sys.stdout
     try:
         if args.json:
-            json.dump({"timeline": timeline, "ceo_reasoning": ceo_reasoning}, out_file, indent=2)
+            json.dump({
+                "timeline": timeline,
+                "ceo_reasoning": ceo_reasoning,
+                "factory_commands": factory_commands,
+            }, out_file, indent=2)
         else:
-            print_report(timeline, ceo_reasoning, file=out_file)
+            print_report(timeline, ceo_reasoning, factory_commands, file=out_file)
     finally:
         if args.output:
             out_file.close()
