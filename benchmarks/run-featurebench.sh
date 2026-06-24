@@ -148,6 +148,7 @@ json.dump({
     'repo': repo,
     'base_commit': instance['base_commit'],
     'problem_statement': instance['problem_statement'],
+    'patch': instance.get('patch', ''),
 }, open('${INSTANCE_JSON}', 'w'), indent=2)
 print(f'Loaded: {instance[\"instance_id\"]}')
 print(f'Repo:   {repo}')
@@ -180,6 +181,20 @@ git checkout --quiet "${BASE_COMMIT}"
 echo "    Checked out ${BASE_COMMIT:0:12}"
 echo "    Working directory: ${WORKSPACE}/repo"
 
+# Apply mask patch — removes function bodies the solver must implement
+MASK_PATCH="${WORKSPACE}/mask_patch.diff"
+python3 -c "import json; open('${MASK_PATCH}', 'w').write(json.load(open('${INSTANCE_JSON}'))['patch'])"
+if [ -s "${MASK_PATCH}" ]; then
+    git apply --whitespace=nowarn "${MASK_PATCH}" 2>/dev/null \
+        && git add -A && git commit --quiet --amend --no-edit \
+        && git reflog expire --expire=now --all && git gc --prune=now --quiet \
+        && MASKED_COMMIT=$(git rev-parse HEAD) \
+        && echo "    Applied mask patch (function bodies removed, baked into commit ${MASKED_COMMIT:0:12})" \
+        || echo "    WARNING: Mask patch failed to apply"
+else
+    echo "    No mask patch in dataset"
+fi
+
 echo ""
 
 # ── Step 5: Run solver (Factory CEO) ──
@@ -189,11 +204,13 @@ echo "    Started at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 SOLVER_PROMPT_FILE="${WORKSPACE}/solver_prompt.txt"
 python3 -c "
-import json
+import json, os
+
 with open('${INSTANCE_JSON}') as f:
     instance = json.load(f)
 
 problem_statement = instance['problem_statement']
+problem_statement = problem_statement.replace('/testbed/', './')
 
 prompt = '''You are implementing a new feature in an open-source Python project.
 
@@ -207,13 +224,14 @@ prompt = '''You are implementing a new feature in an open-source Python project.
 2. Explore the repository to understand the codebase architecture
 3. Implement the feature as described in the problem statement
 4. The problem statement contains detailed interface specifications — follow them exactly
-5. Do NOT assume the feature is already implemented just because existing tests pass
-6. The evaluation will use NEW tests (not the ones in the repo) to verify your implementation
-7. Focus on implementing the interfaces, classes, and functions described in the problem statement
-8. Make sure you don't break existing functionality
+5. The source files have had their function bodies REMOVED — you must write the implementations
+6. Look for functions/methods that have empty bodies or just contain pass/blank lines
+7. The evaluation will use NEW tests (not the ones in the repo) to verify your implementation
+8. Focus on implementing the interfaces, classes, and functions described in the problem statement
+9. Make sure you do not break existing functionality
 
-IMPORTANT: Even if existing tests pass, you MUST implement the feature described above.
-The evaluation tests are DIFFERENT from the tests currently in the repository.
+IMPORTANT: Function bodies have been removed from the source files.
+You MUST implement them based on the specifications in the problem statement.
 
 The repository is available at the current working directory.'''
 with open('${SOLVER_PROMPT_FILE}', 'w') as f:
@@ -244,17 +262,74 @@ if [ "${BENCHMARK_SOLVER:-factory}" = "claude-code" ]; then
         2>&1 | tee "${SOLVER_LOG}" | tail -50 || true
     SOLVER_EXIT=${PIPESTATUS[0]}
 else
-    # Factory CEO path
-    cat > "${WORKSPACE}/repo/factory.md" << 'FACTORYEOF'
+    # Factory CEO path — pre-seed factory state so factory detect returns has_factory
+    PROBLEM_STMT=$(python3 -c "
+import json
+with open('${INSTANCE_JSON}') as f:
+    inst = json.load(f)
+ps = inst['problem_statement'].replace('/testbed/', './')
+print(ps)
+")
+
+    cat > "${WORKSPACE}/repo/factory.md" << FACTORYEOF
 ---
-goal: Implement the feature described in the problem statement
+goal: Implement empty function bodies as described below
 ---
+
+## Scope
+src/**/*.py
+
+## Eval
+eval_command: python -m pytest tests/ -x -q --timeout 60
+eval_threshold: 0.3
+
+## Smoke Test
+python -c "import packaging; print('OK')"
+
+## Task
+
+${PROBLEM_STMT}
 FACTORYEOF
 
+    mkdir -p "${WORKSPACE}/repo/.factory"
+    cat > "${WORKSPACE}/repo/.factory/config.json" << CONFIGEOF
+{
+  "eval_command": "python -m pytest tests/ -x -q --timeout 60",
+  "eval_threshold": 0.3,
+  "target_branch": "HEAD",
+  "smoke_test": "python -c \"import packaging; print(OK)\"",
+  "hard_constraints": [],
+  "eval_spec": []
+}
+CONFIGEOF
+
+    cat > "${WORKSPACE}/repo/.factory/eval_profile.json" << EVALEOF
+{
+  "dimensions": [
+    {"name": "tests", "weight": 1.0, "command": "python -m pytest tests/ -x -q --timeout 60"}
+  ],
+  "human_reviewed": true
+}
+EVALEOF
+
+    mkdir -p "${WORKSPACE}/repo/eval"
+    cat > "${WORKSPACE}/repo/eval/score.py" << SCOREEOF
+import subprocess, json, sys
+r = subprocess.run(["python", "-m", "pytest", "tests/", "-x", "-q", "--timeout", "60"], capture_output=True, text=True)
+s = 1.0 if r.returncode == 0 else 0.0
+json.dump({"composite": s, "dimensions": {"tests": {"score": s, "weight": 1.0}}}, sys.stdout)
+SCOREEOF
+
+    cd "${WORKSPACE}/repo"
+    git add -A
+    git commit -m "factory: pre-seed config for improve mode"
+
+    FACTORY_CEO_MAX_RESPAWNS=0 \
     timeout "${SOLVER_TIMEOUT}" factory ceo . \
         --headless \
         --no-github \
-        --prompt "${SOLVER_PROMPT_FILE}" \
+        --mode improve \
+        --focus "Implement all empty function bodies in the source files. Functions have had their bodies removed and need to be reimplemented based on their signatures, docstrings, and the project context." \
         2>&1 | tee "${SOLVER_LOG}" | tail -50 || true
     SOLVER_EXIT=${PIPESTATUS[0]}
 fi
@@ -330,6 +405,8 @@ if [ "${BENCHMARK_SOLVER:-factory}" = "factory" ]; then
     fi
 
     # Strategy 2: Recover orphaned commits via git fsck
+    # Pick the orphan that descends from HEAD (not BASE_COMMIT — the amend changed the SHA)
+    RECOVERY_BASE=$(git rev-parse HEAD)
     if [ -z "$FACTORY_BRANCH" ]; then
         echo "No factory branch, finding orphaned commits..."
         ORPHAN_COMMITS=$(git fsck --unreachable --no-reflogs 2>/dev/null | grep 'unreachable commit' | awk '{print $3}')
@@ -337,6 +414,9 @@ if [ "${BENCHMARK_SOLVER:-factory}" = "factory" ]; then
             BEST_COMMIT=""
             BEST_TIME=0
             for SHA in $ORPHAN_COMMITS; do
+                if ! git merge-base --is-ancestor "${RECOVERY_BASE}" "$SHA" 2>/dev/null; then
+                    continue
+                fi
                 COMMIT_TIME=$(git show -s --format='%ct' "$SHA" 2>/dev/null || echo 0)
                 if [ "$COMMIT_TIME" -gt "$BEST_TIME" ]; then
                     BEST_TIME=$COMMIT_TIME
@@ -344,11 +424,13 @@ if [ "${BENCHMARK_SOLVER:-factory}" = "factory" ]; then
                 fi
             done
             if [ -n "$BEST_COMMIT" ]; then
-                echo "Recovering from orphan tip: $BEST_COMMIT"
+                echo "Recovering from orphan tip: $BEST_COMMIT (descends from ${RECOVERY_BASE:0:12})"
                 echo "  Message: $(git log -1 --format='%s' $BEST_COMMIT 2>/dev/null)"
                 git checkout "$BEST_COMMIT" -- . 2>/dev/null || true
                 git checkout HEAD -- .factory/ eval/ factory.md 2>/dev/null || true
                 rm -rf .factory/ eval/ factory.md 2>/dev/null || true
+            else
+                echo "No orphan commits descend from ${RECOVERY_BASE:0:12}"
             fi
         fi
     fi
@@ -373,7 +455,11 @@ log "Step 6: Capturing patch"
 
 cd "${WORKSPACE}/repo"
 PATCH_FILE="${WORKSPACE}/model_patch.diff"
-git diff "${BASE_COMMIT}" -- . ':!.factory' ':!eval' ':!factory.md' > "${PATCH_FILE}"
+
+# Diff against the masked commit (not BASE_COMMIT) so the patch captures
+# the full function body additions from masked→implemented
+DIFF_BASE="${MASKED_COMMIT:-${BASE_COMMIT}}"
+git diff "${DIFF_BASE}" -- . ':!.factory' ':!eval' ':!factory.md' > "${PATCH_FILE}"
 
 # Fallback: if committed diff is empty, try unstaged diff too
 if [ ! -s "${PATCH_FILE}" ]; then
@@ -387,7 +473,7 @@ if [ "${PATCH_SIZE}" -eq 0 ]; then
     echo "    Evaluation will proceed but instance will not be resolved."
 else
     PATCH_LINES="$(wc -l < "${PATCH_FILE}")"
-    PATCH_FILES="$(git diff "${BASE_COMMIT}" --name-only -- . ':!.factory' ':!eval' ':!factory.md' | wc -l)"
+    PATCH_FILES="$(git diff "${DIFF_BASE}" --name-only -- . ':!.factory' ':!eval' ':!factory.md' | wc -l)"
     echo "    Patch: ${PATCH_LINES} lines across ${PATCH_FILES} file(s)"
 fi
 echo ""
@@ -449,11 +535,26 @@ log "Step 9: Extracting results"
 
 RESULTS_JSON=""
 
-for candidate in "${HARNESS_DIR}"/runs/*/eval_outputs/"${INSTANCE_ID}"/attempt-*/report.json; do
+# Check predictions directory first (fb eval writes here)
+for candidate in "${PREDICTIONS_DIR}"/eval_outputs/"${INSTANCE_ID}"/attempt-*/report.json; do
     if [ -f "${candidate}" ]; then
         RESULTS_JSON="${candidate}"
     fi
 done
+
+# Fallback: check predictions dir top-level report
+if [ -z "${RESULTS_JSON}" ] && [ -f "${PREDICTIONS_DIR}/report.json" ]; then
+    RESULTS_JSON="${PREDICTIONS_DIR}/report.json"
+fi
+
+# Fallback: check harness runs directory
+if [ -z "${RESULTS_JSON}" ]; then
+    for candidate in "${HARNESS_DIR}"/runs/*/eval_outputs/"${INSTANCE_ID}"/attempt-*/report.json; do
+        if [ -f "${candidate}" ]; then
+            RESULTS_JSON="${candidate}"
+        fi
+    done
+fi
 
 if [ -z "${RESULTS_JSON}" ]; then
     for candidate in "${HARNESS_DIR}"/runs/*/report.json; do
