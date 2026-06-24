@@ -3350,6 +3350,51 @@ def cmd_tmux_stop(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_refactory(args: argparse.Namespace) -> int:
+    """Launch the re:factory persistent supervisor agent.
+
+    Sets up the workspace, resolves the session ID, and replaces the current
+    process with an interactive claude session via os.execvp.
+    """
+    import shutil
+
+    from factory.agents.runner import resolve_prompt
+    from factory.refactory import get_session_id, setup_workspace
+
+    claude_path = shutil.which("claude")
+    if not claude_path:
+        print("Error: 'claude' CLI not found. Install Claude Code first.", file=sys.stderr)
+        return 1
+
+    workspace = setup_workspace()
+    reset = getattr(args, "reset", False)
+    is_new_session = reset or not (Path.home() / ".factory" / "refactory-session.json").exists()
+    session_id = get_session_id(reset=reset)
+    model = getattr(args, "model", None)
+
+    prompt = resolve_prompt("refactory")
+    prompt_file = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".md", prefix="refactory-prompt-", delete=False,
+    )
+    prompt_file.write(prompt)
+    prompt_file.close()
+
+    cmd = [
+        "claude",
+        "--session-id", session_id,
+        "--append-system-prompt-file", prompt_file.name,
+        "--cwd", str(workspace),
+    ]
+
+    if not is_new_session:
+        cmd.insert(3, "--resume")
+
+    if model:
+        cmd.extend(["--model", model])
+
+    os.execvp("claude", cmd)
+    return 0  # unreachable after execvp
+
 
 def _has_research_target(project_path: Path) -> bool:
     """Check if project already has research_target configured."""
@@ -4525,6 +4570,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", default=False, dest="stop_all",
                     help="Stop ALL factory tmux sessions (required when no --session/--path given)")
 
+    # refactory — persistent supervisor agent
+    p = sub.add_parser("refactory", help="Launch the re:factory persistent supervisor agent")
+    p.add_argument("--reset", action="store_true", default=False,
+                    help="Reset session (new session ID, fresh start)")
+    p.add_argument("--model", default=None,
+                    help="Claude model override")
+
     # workflow — graph engine commands
     from factory.workflow.cli import add_workflow_parser
     add_workflow_parser(sub)
@@ -4553,7 +4605,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.command:
         if sys.stdin.isatty() and sys.stderr.isatty():
-            return _welcome_wizard()
+            return cmd_refactory(args)
         parser.print_help()
         return 1
 
@@ -4618,6 +4670,7 @@ def main(argv: list[str] | None = None) -> int:
         "tmux": cmd_tmux,
         "tmux-ls": cmd_tmux_ls,
         "tmux-stop": cmd_tmux_stop,
+        "refactory": cmd_refactory,
         "workflow": lambda a: __import__("factory.workflow.cli", fromlist=["cmd_workflow"]).cmd_workflow(a),
     }
 
