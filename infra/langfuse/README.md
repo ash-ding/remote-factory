@@ -14,8 +14,8 @@ cd infra/langfuse && docker compose up -d
 ```bash
 export LANGFUSE_HOST=http://localhost:3000
 export LANGFUSE_BASE_URL=http://localhost:3000
-export LANGFUSE_PUBLIC_KEY=pk-lf-dev-local-key
-export LANGFUSE_SECRET_KEY=sk-lf-dev-local-key
+export LANGFUSE_PUBLIC_KEY=<your-public-key>
+export LANGFUSE_SECRET_KEY=<your-secret-key>
 export TELEMETRY_PLATFORM=langfuse
 
 factory ceo /path/to/project
@@ -30,10 +30,12 @@ If you need to create it manually, the file should look like:
 ```
 LANGFUSE_HOST=http://localhost:3000
 LANGFUSE_BASE_URL=http://localhost:3000
-LANGFUSE_PUBLIC_KEY=pk-lf-dev-local-key
-LANGFUSE_SECRET_KEY=sk-lf-dev-local-key
+LANGFUSE_PUBLIC_KEY=<your-public-key>
+LANGFUSE_SECRET_KEY=<your-secret-key>
 TELEMETRY_PLATFORM=langfuse
 ```
+
+For local dev, `scripts/langfuse-setup start` fills in the correct keys automatically.
 
 To persist across sessions, add the `export` versions to `~/.bashrc` or `~/.zshrc`.
 
@@ -62,8 +64,8 @@ Trace: factory:<project>/<mode>
 |-----------|---------|-------|
 | `LANGFUSE_HOST` | — | Required. Set to `http://localhost:3000` for local dev |
 | `LANGFUSE_BASE_URL` | — | Same as HOST (some SDK versions use this) |
-| `LANGFUSE_PUBLIC_KEY` | — | `pk-lf-dev-local-key` for local dev |
-| `LANGFUSE_SECRET_KEY` | — | `sk-lf-dev-local-key` for local dev |
+| `LANGFUSE_PUBLIC_KEY` | — | Set by `scripts/langfuse-setup start` (see `.env.local`) |
+| `LANGFUSE_SECRET_KEY` | — | Set by `scripts/langfuse-setup start` (see `.env.local`) |
 | `TELEMETRY_PLATFORM` | — | Set to `langfuse` to enable |
 
 ### Verifying Traces
