@@ -746,6 +746,15 @@ def cmd_discover(args: argparse.Namespace) -> int:
             json.dumps(eval_spec, indent=2) + "\n"
         )
 
+    from factory.discovery.spec import generate_spec, resolve_spec
+
+    spec_path, spec_source = resolve_spec(project_path)
+    if spec_source == "absent":
+        spec_content = generate_spec(project_path, profile)
+        spec_path = store.factory_dir / "SPEC.md"
+        spec_path.write_text(spec_content)
+        spec_source = "generated"
+
     dims = [d.name for d in eval_profile.dimensions]
     _emit_cli_event(project_path, "discover.completed", {
         "language": profile.language,
@@ -758,6 +767,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
         "project": profile.model_dump(),
         "eval_profile": eval_profile.model_dump(),
         "eval_spec": eval_spec,
+        "spec": {"path": str(spec_path), "source": spec_source},
     }
     print(json.dumps(output, indent=2))
 
