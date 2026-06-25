@@ -3387,12 +3387,14 @@ def cmd_refactory(args: argparse.Namespace) -> int:
             "claude",
             "--session-id", session_id,
             "--append-system-prompt-file", prompt_file.name,
+            "--dangerously-skip-permissions",
         ]
     else:
         cmd = [
             "claude",
             "--resume", session_id,
             "--append-system-prompt-file", prompt_file.name,
+            "--dangerously-skip-permissions",
         ]
 
     if model:
