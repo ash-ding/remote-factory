@@ -291,6 +291,7 @@ class ProjectProfile(BaseModel):
     has_linter: bool
     has_type_checker: bool
     has_ci: bool
+    has_spec: bool = False
     test_command: str | None = None
     lint_command: str | None = None
     type_check_command: str | None = None
