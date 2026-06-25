@@ -163,7 +163,7 @@ class TestCmdRefactory:
             code = cmd_refactory(args)
         assert code == 1
 
-    def test_new_session_no_resume_flag(self, mock_home: Path) -> None:
+    def test_new_session_uses_session_id(self, mock_home: Path) -> None:
         from unittest.mock import patch
 
         from factory.cli import cmd_refactory, build_parser
@@ -178,9 +178,8 @@ class TestCmdRefactory:
         assert "--session-id" in cmd
         assert "--resume" not in cmd
         assert "--append-system-prompt-file" in cmd
-        assert "--cwd" not in cmd
 
-    def test_existing_session_has_resume_flag(self, mock_home: Path) -> None:
+    def test_existing_session_uses_resume(self, mock_home: Path) -> None:
         from unittest.mock import patch
 
         from factory.cli import cmd_refactory, build_parser
@@ -194,8 +193,11 @@ class TestCmdRefactory:
 
         cmd = mock_exec.call_args[0][1]
         assert "--resume" in cmd
+        assert "--session-id" not in cmd
+        resume_idx = cmd.index("--resume")
+        assert cmd[resume_idx + 1] == "existing-uuid"
 
-    def test_reset_flag_no_resume(self, mock_home: Path) -> None:
+    def test_reset_flag_uses_session_id(self, mock_home: Path) -> None:
         from unittest.mock import patch
 
         from factory.cli import cmd_refactory, build_parser
@@ -208,6 +210,7 @@ class TestCmdRefactory:
             cmd_refactory(args)
 
         cmd = mock_exec.call_args[0][1]
+        assert "--session-id" in cmd
         assert "--resume" not in cmd
 
     def test_model_flag_forwarded(self, mock_home: Path) -> None:

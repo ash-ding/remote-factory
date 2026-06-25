@@ -3379,14 +3379,18 @@ def cmd_refactory(args: argparse.Namespace) -> int:
     prompt_file.write(prompt)
     prompt_file.close()
 
-    cmd = [
-        "claude",
-        "--session-id", session_id,
-        "--append-system-prompt-file", prompt_file.name,
-    ]
-
-    if not is_new_session:
-        cmd.insert(3, "--resume")
+    if is_new_session:
+        cmd = [
+            "claude",
+            "--session-id", session_id,
+            "--append-system-prompt-file", prompt_file.name,
+        ]
+    else:
+        cmd = [
+            "claude",
+            "--resume", session_id,
+            "--append-system-prompt-file", prompt_file.name,
+        ]
 
     if model:
         cmd.extend(["--model", model])
