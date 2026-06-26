@@ -30,25 +30,22 @@ SOP_COMPACT_DIR = Path(__file__).parent / "agents" / "sop-compact"
 
 
 def setup_workspace(project_path: Path) -> Path:
-    """Create the re:factory workspace at <project>/.refactory/.
+    """Set up re:factory for a project.
 
-    Idempotent — safe to call on every launch. Creates directory structure
-    and writes config files, overwriting settings.json and CLAUDE.md to
-    pick up any updates.
+    Session state goes in <project>/.refactory/. Skills and settings are
+    installed into the PROJECT's .claude/ so the agent runs from the
+    project root with full access to the source tree.
 
-    Returns the workspace path.
+    Idempotent — safe to call on every launch. Overwrites settings and
+    skills to pick up updates.
+
+    Returns the workspace path (.refactory/).
     """
     workspace = project_path / ".refactory"
     workspace.mkdir(parents=True, exist_ok=True)
 
-    claude_dir = workspace / ".claude"
-    claude_dir.mkdir(exist_ok=True)
-
-    commands_dir = claude_dir / "commands"
-    commands_dir.mkdir(exist_ok=True)
-
-    sop_dir = claude_dir / "sop-compact"
-    sop_dir.mkdir(exist_ok=True)
+    sop_dir = workspace / ".claude" / "sop-compact"
+    sop_dir.mkdir(parents=True, exist_ok=True)
 
     for hook_name in ("pre-compact.sh", "session-start.sh"):
         src = SOP_COMPACT_DIR / hook_name
@@ -59,7 +56,18 @@ def setup_workspace(project_path: Path) -> Path:
 
     sop_src = SOP_COMPACT_DIR / "sop-compact.md"
     if sop_src.is_file():
-        shutil.copy2(sop_src, claude_dir / "sop-compact.md")
+        shutil.copy2(sop_src, workspace / ".claude" / "sop-compact.md")
+
+    project_claude_dir = project_path / ".claude"
+    project_claude_dir.mkdir(exist_ok=True)
+
+    commands_dir = project_claude_dir / "commands"
+    commands_dir.mkdir(exist_ok=True)
+
+    skills_src = Path(__file__).parent / "agents" / "skills"
+    if skills_src.is_dir():
+        for skill_file in skills_src.glob("*.md"):
+            shutil.copy2(skill_file, commands_dir / skill_file.name)
 
     settings = dict(SETTINGS_JSON)
     settings["hooks"] = {
@@ -86,16 +94,11 @@ def setup_workspace(project_path: Path) -> Path:
         ],
     }
 
-    settings_path = claude_dir / "settings.json"
+    settings_path = project_claude_dir / "settings.local.json"
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
 
     claude_md_path = workspace / "CLAUDE.md"
     claude_md_path.write_text(CLAUDE_MD_CONTENT)
-
-    skills_src = Path(__file__).parent / "agents" / "skills"
-    if skills_src.is_dir():
-        for skill_file in skills_src.glob("*.md"):
-            shutil.copy2(skill_file, commands_dir / skill_file.name)
 
     return workspace
 

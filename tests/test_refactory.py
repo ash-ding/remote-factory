@@ -27,12 +27,12 @@ class TestSetupWorkspace:
         setup_workspace(tmp_path)
         workspace = tmp_path / ".refactory"
         assert workspace.is_dir()
-        assert (workspace / ".claude").is_dir()
-        assert (workspace / ".claude" / "commands").is_dir()
+        assert (tmp_path / ".claude").is_dir()
+        assert (tmp_path / ".claude" / "commands").is_dir()
 
     def test_writes_settings_json(self, tmp_path: Path) -> None:
         setup_workspace(tmp_path)
-        settings = tmp_path / ".refactory" / ".claude" / "settings.json"
+        settings = tmp_path / ".claude" / "settings.local.json"
         assert settings.exists()
         data = json.loads(settings.read_text())
         assert "factory" in data["mcpServers"]
@@ -45,7 +45,7 @@ class TestSetupWorkspace:
 
     def test_copies_skills(self, tmp_path: Path) -> None:
         setup_workspace(tmp_path)
-        commands_dir = tmp_path / ".refactory" / ".claude" / "commands"
+        commands_dir = tmp_path / ".claude" / "commands"
         skills_src = Path(__file__).parent.parent / "factory" / "agents" / "skills"
         expected = list(skills_src.glob("*.md"))
         assert len(expected) > 0, "No skill source files found"
@@ -56,7 +56,7 @@ class TestSetupWorkspace:
         ws1 = setup_workspace(tmp_path)
         ws2 = setup_workspace(tmp_path)
         assert ws1 == ws2
-        settings = tmp_path / ".refactory" / ".claude" / "settings.json"
+        settings = tmp_path / ".claude" / "settings.local.json"
         data = json.loads(settings.read_text())
         assert "factory" in data["mcpServers"]
 
@@ -79,7 +79,7 @@ class TestSetupWorkspace:
 
     def test_settings_json_has_hooks(self, tmp_path: Path) -> None:
         setup_workspace(tmp_path)
-        settings = tmp_path / ".refactory" / ".claude" / "settings.json"
+        settings = tmp_path / ".claude" / "settings.local.json"
         data = json.loads(settings.read_text())
         assert "hooks" in data
         assert "PreCompact" in data["hooks"]

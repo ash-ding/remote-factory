@@ -3400,7 +3400,7 @@ def cmd_refactory(args: argparse.Namespace) -> int:
     if model:
         cmd.extend(["--model", model])
 
-    os.chdir(workspace)
+    os.chdir(project_path)
     os.execvp("claude", cmd)
     return 0  # unreachable after execvp
 
