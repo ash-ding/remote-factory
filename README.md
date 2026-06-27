@@ -34,7 +34,10 @@ Then start with one of the two main workflows:
 uv run factory ceo "my idea" --mode design
 
 # Improve — point at an existing project for continuous improvement
-uv run factory ceo /path/to/project --mode improve
+uv run factory ceo /path/to/project --mode improve --focus "issue # or whatever you want to improve or fix"
+
+# Co-improve — if you want to iterate on the implementation plan before implementation starts for an improvement
+uv run factory ceo /path/to/project --mode design --focus "issue # or whatever you want to improve or fix"
 ```
 
 See the [full setup guide](docs/setup.md) for authentication and environment variables.
@@ -46,7 +49,8 @@ See the [full setup guide](docs/setup.md) for authentication and environment var
 | I want to… | Command |
 |---|---|
 | **Start from a raw idea** | `uv run factory ceo "my idea" --mode design` |
-| **Improve an existing project** | `uv run factory ceo /path/to/project --mode improve` |
+| **Improve an existing project** | `uv run factory ceo /path/to/project --mode improve --focus "issue number or whatever you want to improve or fix ` |
+| **Co-improve an existing project** | `uv run factory ceo /path/to/project --mode design --focus "description of whatever you want to improve or fix ` |
 | **Create a new factory mode** | `uv run factory ceo /path/to/factory --mode create "description"` |
 
 ---
@@ -93,8 +97,6 @@ uv run factory ceo ~/my-app --mode improve --focus "add dark mode toggle"
 uv run factory ceo ~/my-app --mode improve --focus 42                       # GitHub issue
 uv run factory ceo ~/my-app --mode improve --focus "owner/repo#42"          # Issue shorthand
 ```
-
-Other ways to steer: file GitHub issues (the Strategist reads them), add to the backlog manually, or pass a spec file with `--prompt`.
 
 ---
 
