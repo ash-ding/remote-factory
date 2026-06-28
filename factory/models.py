@@ -454,7 +454,7 @@ class CycleState(BaseModel):
 
     cycle_id: str
     started_at: datetime
-    mode: Literal["build", "discover", "improve", "meta", "research", "review"]
+    mode: Literal["build", "discover", "improve", "meta", "qa", "research", "review"]
     initial_prompt: str = ""
     respawns: int = 0
     runner_name: str | None = None

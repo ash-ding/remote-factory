@@ -34,6 +34,7 @@ __all__ = [
     "build_workflow",
     "design_workflow",
     "improve_workflow",
+    "qa_workflow",
     "research_workflow",
     "meta_workflow",
     "discover_workflow",
@@ -523,6 +524,75 @@ def improve_workflow() -> Workflow:
         start_node="study",
         trigger=trigger,
     )
+
+
+# ── W₃b: QA Mode ───────────────────────────────────────────────
+
+
+def qa_workflow() -> Workflow:
+    """W₃b: QA Mode — standalone PR verification via the improve workflow's QA pipeline.
+
+    Extracts {qa, gate_qa, gate_precheck} from W₃ via subgraph(), modifies
+    gate_qa to remove builder references, and adds a post_review FnNode.
+
+    qa → gate_qa → gate_precheck → post_review
+                 ↘ (HALT) → post_review
+                              ↑ (HALT from gate_precheck)
+    """
+    wf = improve_workflow()
+    sub = wf.subgraph(
+        {"qa", "gate_qa", "gate_precheck"},
+        name="qa",
+        start_node="qa",
+    )
+
+    # The QA node inherited reads from improve where it follows the builder.
+    # In QA mode it's the start node — clear the predecessor dependency.
+    qa_node = sub.nodes["qa"]
+    assert isinstance(qa_node, AgentNode)
+    sub.nodes["qa"] = AgentNode(
+        id=qa_node.id,
+        role=qa_node.role,
+        prompt_template=qa_node.prompt_template,
+        reads=set(),
+        writes=qa_node.writes,
+    )
+
+    gate_qa = sub.nodes["gate_qa"]
+    assert isinstance(gate_qa, GateNode)
+    sub.nodes["gate_qa"] = GateNode(
+        id="gate_qa",
+        evaluator_type=gate_qa.evaluator_type,
+        evaluator_role=gate_qa.evaluator_role,
+        gate_prompt=(
+            "Review QA results. PROCEED if all checks pass. "
+            "HALT if issues found — this is a verification-only mode with no fix loop."
+        ),
+        reads=gate_qa.reads,
+    )
+
+    sub.nodes["post_review"] = FnNode(
+        id="post_review",
+        command=(
+            "factory review --verdict $VERDICT --pr $PR_NUMBER"
+            " --score-before $SCORE_BEFORE --score-after $SCORE_AFTER"
+        ),
+        reads={".factory/reviews/qa-latest.md"},
+    )
+
+    sub.edges = [
+        Edge(source="qa", target="gate_qa"),
+        Edge(source="gate_qa", target="gate_precheck", condition=VerdictType.PROCEED),
+        Edge(source="gate_qa", target="post_review", condition=VerdictType.HALT),
+        Edge(source="gate_precheck", target="post_review", condition=VerdictType.PROCEED),
+        Edge(source="gate_precheck", target="post_review", condition=VerdictType.HALT),
+    ]
+
+    def trigger(state: ProjectState, ctx: dict[str, Any]) -> bool:
+        return ctx.get("mode") == "qa"
+
+    sub.trigger = trigger
+    return sub
 
 
 # ── W₄: Research Mode ───────────────────────────────────────────
@@ -1583,13 +1653,14 @@ def skill_refine_workflow() -> Workflow:
 
 
 def register_all() -> dict[str, Workflow]:
-    """Build and return all 10 workflow definitions."""
+    """Build and return all 11 workflow definitions."""
     return {
         "build": build_workflow(),
         "design": design_workflow(),
         "discover": discover_workflow(),
         "review": review_workflow(),
         "improve": improve_workflow(),
+        "qa": qa_workflow(),
         "research": research_workflow(),
         "meta": meta_workflow(),
         "refine": refine_workflow(),

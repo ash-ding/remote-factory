@@ -2462,6 +2462,66 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         print(result)
         return code
 
+    # ── qa mode early exit ─────────────────────────────────────
+    if mode == "qa":
+        pr_number = getattr(args, "pr", None)
+        if pr_number is None:
+            print("Error: --mode qa requires --pr <number>", file=sys.stderr)
+            return 1
+
+        repo = getattr(args, "repo", None)
+        model = _resolve_model(args)
+        runner_name = _resolve_runner(args)
+
+        project_path = Path(raw_path).expanduser().resolve()
+        if not project_path.is_dir():
+            print(f"Error: project path must be an existing directory for qa mode: {raw_path}",
+                  file=sys.stderr)
+            return 1
+
+        _print_banner("qa")
+
+        repo_flag = f" --repo {repo}" if repo else ""
+        repo_clause = f" in repo `{repo}`" if repo else ""
+        task = (
+            f"Project: {project_path}\nMode: qa\n\n"
+            f"## QA Verification Directive\n\n"
+            f"Run the QA verification pipeline for PR #{pr_number}{repo_clause}.\n\n"
+            f"Read and follow the workflow-qa SKILL.md playbook at "
+            f"skills/workflow-qa/SKILL.md.\n\n"
+            f"Key parameters:\n"
+            f"- PR_NUMBER={pr_number}\n"
+            f"- PROJECT_PATH={project_path}\n"
+            f"{f'- REPO={repo}' + chr(10) if repo else ''}"
+            f"\nPost the final verdict via:\n"
+            f"factory review --verdict <KEEP|REVERT> --pr {pr_number} "
+            f"--score-before $SCORE_BEFORE --score-after $SCORE_AFTER"
+            f"{repo_flag}\n"
+        )
+
+        if not headless:
+            from factory.models import AgentRunRequest
+
+            prompt = resolve_prompt("ceo", project_path)
+            runner = get_runner(runner_name)
+            return runner.interactive_run(AgentRunRequest(
+                prompt=prompt, task=task, cwd=project_path,
+                model=model, role="ceo", skip_permissions=True,
+            ))
+
+        from factory.ceo_completion import run_ceo_with_completion_guard
+        result, code = _run(run_ceo_with_completion_guard(
+            project_path,
+            task,
+            mode="qa",
+            runner_name=runner_name,
+            model=model,
+            timeout=7200.0,
+            max_respawns=1,
+        ))
+        print(result)
+        return code
+
     _design_is_existing = (
         mode == "design"
         and raw_path
@@ -4435,11 +4495,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--mode",
-        choices=["auto", "auto-fresh", "build", "discover", "improve", "meta", "design", "interactive", "research", "review", "create"],
+        choices=["auto", "auto-fresh", "build", "discover", "improve", "meta", "design", "interactive", "research", "review", "qa", "create"],
         default="auto",
         help="Run mode: auto (default, respects in-flight cycle), auto-fresh (ignores in-flight cycle), "
              "build, discover, improve, meta, design (research + brainstorm → spec → build), "
              "research (autonomous research optimization), review (on-demand PR review), "
+             "qa (QA verification pipeline for PRs), "
              "or create (meta-mode for creating new factory modes)",
     )
     p.add_argument(
@@ -4496,9 +4557,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bg-agents", action="store_true", default=False,
                     help="Background sub-agents (via FACTORY_BG=1) while CEO runs in foreground")
     p.add_argument("--pr", type=int, default=None,
-                    help="PR number for --mode review (required when mode=review)")
+                    help="PR number for --mode review or --mode qa (required when mode=review or mode=qa)")
     p.add_argument("--repo", default=None,
-                    help="Repository (owner/repo) for --mode review (optional, defaults to current repo)")
+                    help="Repository (owner/repo) for --mode review or --mode qa (optional, defaults to current repo)")
 
     # run
     p = sub.add_parser("run", help="Run factory cycle (delegates to CEO agent)")
@@ -4573,7 +4634,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--session", default=None, help="Custom tmux session name")
     p.add_argument(
         "--mode",
-        choices=["auto", "auto-fresh", "build", "discover", "improve", "meta", "research"],
+        choices=["auto", "auto-fresh", "build", "discover", "improve", "meta", "research", "qa"],
         default="auto",
         help="Run mode (default: auto, respects in-flight cycle)",
     )

@@ -64,6 +64,14 @@ WORKFLOW_META: dict[str, dict[str, str | list[str]]] = {
         ),
         "argument_hint": "<project_path> [--focus <target>]",
     },
+    "qa": {
+        "description": (
+            "QA mode — run the QA verification pipeline against a PR. "
+            "Spawns QA Agent (health check + code review + adversarial QA), "
+            "CEO review gate, precheck, and posts verdict as GitHub PR review."
+        ),
+        "argument_hint": "<project_path> --pr <number>",
+    },
     "research": {
         "description": (
             "Research mode — extends improve with baseline measurement, failure analysis, "
@@ -286,7 +294,8 @@ def _fn_to_instruction(node: FnNode, workflow: Workflow) -> str:
 
 def _has_template_placeholders(text: str) -> bool:
     """Check if a command has $VARIABLE placeholders that need CEO substitution."""
-    placeholders = {"$EXP_ID", "$VERDICT", "$HYPOTHESIS", "$REQUEST"}
+    placeholders = {"$EXP_ID", "$VERDICT", "$HYPOTHESIS", "$REQUEST",
+                     "$PR_NUMBER", "$SCORE_BEFORE", "$SCORE_AFTER"}
     return any(p in text for p in placeholders)
 
 
