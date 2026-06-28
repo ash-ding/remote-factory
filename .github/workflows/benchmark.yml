@@ -3,8 +3,6 @@ name: Benchmark CI
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: '17 6 * * 1-5'
   workflow_dispatch:
     inputs:
       benchmark:
