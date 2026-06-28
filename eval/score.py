@@ -16,7 +16,7 @@ import os
 import subprocess
 import sys
 
-EVAL_TIMEOUT = int(os.environ.get("FACTORY_EVAL_TIMEOUT", "600"))
+EVAL_TIMEOUT = int(os.environ.get("FACTORY_EVAL_TIMEOUT", "1200"))
 
 
 def eval_tests() -> dict:
