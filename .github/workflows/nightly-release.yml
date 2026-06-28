@@ -86,8 +86,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           KEEP=7
-          NIGHTLIES=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
-            | grep 'nightly-' | awk '{print $1}')
+          NIGHTLIES=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
+            -q '[.[] | select(.tagName | startswith("nightly-"))][].tagName')
 
           COUNT=0
           for TAG in $NIGHTLIES; do
