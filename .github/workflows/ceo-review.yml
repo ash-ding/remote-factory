@@ -72,7 +72,7 @@ jobs:
           CLOUD_ML_REGION: ${{ secrets.GCP_REGION }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          uv run factory ceo . --mode review --pr ${{ steps.pr.outputs.number }} --headless
+          uv run factory ceo . --mode qa --pr ${{ steps.pr.outputs.number }} --headless
 
       - name: Approve PR if verdict is KEEP
         if: success()

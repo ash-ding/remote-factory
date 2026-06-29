@@ -205,6 +205,30 @@ class Workflow(BaseModel):
         from factory.workflow.validation import validate_workflow
         return validate_workflow(self)
 
+    def subgraph(
+        self,
+        node_ids: set[str],
+        *,
+        name: str,
+        start_node: str,
+    ) -> Workflow:
+        """Extract a subgraph containing only the specified nodes.
+
+        Deep-copies requested nodes and filters edges to only those
+        where both source and target are in node_ids.
+        """
+        nodes: dict[str, NodeType] = {}
+        for nid in node_ids:
+            if nid not in self.nodes:
+                raise ValueError(f"node '{nid}' not found in workflow '{self.name}'")
+            nodes[nid] = self.nodes[nid].model_copy(deep=True)
+        edges = [
+            e.model_copy(deep=True)
+            for e in self.edges
+            if e.source in node_ids and e.target in node_ids
+        ]
+        return Workflow(name=name, nodes=nodes, edges=edges, start_node=start_node)
+
 
 # ── factory ──────────────────────────────────────────────────────
 

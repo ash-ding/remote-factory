@@ -64,6 +64,20 @@ WORKFLOW_META: dict[str, dict[str, str | list[str]]] = {
         ),
         "argument_hint": "<project_path> [--focus <target>]",
     },
+    "qa": {
+        "description": (
+            "QA mode — run the QA verification pipeline against a PR. "
+            "Spawns QA Agent (health check + code review + adversarial QA), "
+            "CEO review gate, precheck, and posts verdict as GitHub PR review."
+        ),
+        "argument_hint": "<project_path> --pr <number>",
+        "preamble": (
+            "**Output constraint:** Your ONLY GitHub output artifact is the "
+            "`factory review` command in the final step. Do NOT run `gh pr comment`, "
+            "`gh issue comment`, or post any other comments on the PR. "
+            "All analysis stays in .factory/reviews/ files."
+        ),
+    },
     "research": {
         "description": (
             "Research mode — extends improve with baseline measurement, failure analysis, "
@@ -286,7 +300,8 @@ def _fn_to_instruction(node: FnNode, workflow: Workflow) -> str:
 
 def _has_template_placeholders(text: str) -> bool:
     """Check if a command has $VARIABLE placeholders that need CEO substitution."""
-    placeholders = {"$EXP_ID", "$VERDICT", "$HYPOTHESIS", "$REQUEST"}
+    placeholders = {"$EXP_ID", "$VERDICT", "$HYPOTHESIS", "$REQUEST",
+                     "$PR_NUMBER", "$SCORE_BEFORE", "$SCORE_AFTER"}
     return any(p in text for p in placeholders)
 
 
@@ -507,6 +522,10 @@ def workflow_to_skill_md(workflow: Workflow) -> str:
 
     title = name.replace("_", " ").replace("-", " ").title()
     header = f"# {title} Workflow\n\nThe user wants: **$ARGUMENTS**"
+
+    preamble = meta.get("preamble")
+    if preamble:
+        header += f"\n\n{preamble}"
 
     reloop_map: dict[str, list[Edge]] = defaultdict(list)
     for edge in workflow.edges:
