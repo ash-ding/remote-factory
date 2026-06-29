@@ -568,6 +568,7 @@ def qa_workflow() -> Workflow:
         command=(
             "factory review --verdict $VERDICT --pr $PR_NUMBER"
             " --score-before $SCORE_BEFORE --score-after $SCORE_AFTER"
+            " --qa-body-file .factory/reviews/qa-latest.md"
         ),
         reads={".factory/reviews/qa-latest.md"},
     )

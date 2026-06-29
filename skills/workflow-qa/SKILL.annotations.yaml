@@ -51,11 +51,11 @@ post_review:
   type: FnNode
   id: post_review
   command: factory review --verdict $VERDICT --pr $PR_NUMBER --score-before $SCORE_BEFORE
-    --score-after $SCORE_AFTER
+    --score-after $SCORE_AFTER --qa-body-file .factory/reviews/qa-latest.md
   reads:
   - .factory/reviews/qa-latest.md
   writes: []
   edges_out: []
   slots:
     finalize_command_post_review: factory review --verdict $VERDICT --pr $PR_NUMBER
-      --score-before $SCORE_BEFORE --score-after $SCORE_AFTER
+      --score-before $SCORE_BEFORE --score-after $SCORE_AFTER --qa-body-file .factory/reviews/qa-latest.md
