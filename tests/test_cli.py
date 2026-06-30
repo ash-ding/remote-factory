@@ -1,5 +1,6 @@
 """Tests for factory.cli — CLI subcommand routing."""
 
+import argparse
 import asyncio
 import contextlib
 import json
@@ -139,6 +140,60 @@ class TestParser:
         parser = build_parser()
         args = parser.parse_args(["agent", "failure_analyst", "--task", "test", "--project", "/p"])
         assert args.role == "failure_analyst"
+
+
+class TestGroupedHelp:
+    """Tests for _GroupedHelpParser and _COMMAND_GROUPS completeness."""
+
+    EXPECTED_GROUPS = [
+        "Entry Points:",
+        "Project Setup:",
+        "Experiment Lifecycle:",
+        "Project Intelligence:",
+        "Backlog & Refinement:",
+        "Knowledge & Archive:",
+        "Self-Evolution:",
+        "Configuration:",
+        "Validation & Recovery:",
+    ]
+
+    def test_help_output_contains_all_group_headers(self):
+        help_text = build_parser().format_help()
+        for header in self.EXPECTED_GROUPS:
+            assert header in help_text, f"Missing group header: {header}"
+
+    def test_all_subcommands_covered_by_groups(self):
+        from factory.cli import _COMMAND_GROUPS
+        grouped = {cmd for _, cmds in _COMMAND_GROUPS for cmd in cmds}
+        parser = build_parser()
+        sub_action = None
+        for action in parser._subparsers._group_actions:
+            if isinstance(action, argparse._SubParsersAction):
+                sub_action = action
+                break
+        assert sub_action is not None
+        registered = set(sub_action._name_parser_map.keys())
+        orphans = registered - grouped
+        assert orphans == set(), f"Commands not in any group: {orphans}"
+
+    def test_no_command_in_multiple_groups(self):
+        from factory.cli import _COMMAND_GROUPS
+        seen: dict[str, str] = {}
+        duplicates: list[str] = []
+        for group_name, cmds in _COMMAND_GROUPS:
+            for cmd in cmds:
+                if cmd in seen:
+                    duplicates.append(f"{cmd!r} in both {seen[cmd]!r} and {group_name!r}")
+                seen[cmd] = group_name
+        assert duplicates == [], f"Commands in multiple groups: {duplicates}"
+
+    def test_no_ungrouped_other_section(self):
+        help_text = build_parser().format_help()
+        assert "\nOther:\n" not in help_text, "Help has an 'Other' section — some commands are ungrouped"
+
+    def test_group_count_is_nine(self):
+        from factory.cli import _COMMAND_GROUPS
+        assert len(_COMMAND_GROUPS) == 9
 
 
 class TestCmdCeoDesign:
