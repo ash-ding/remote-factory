@@ -915,6 +915,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#configuration-priority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration Priority
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#score-extraction" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1451,6 +1462,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#configuration-priority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration Priority
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#score-extraction" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1914,6 +1936,15 @@
 <li><strong>Mode B (directory inference):</strong> No <code>--task</code> argument — preflight infers the task from the project directory name (e.g., <code>/path/to/circle-packing</code>). This supports the outer loop's worktree isolation, where each instance directory is named after the task.</li>
 </ul>
 <p>Both modes validate against the same <code>SUPPORTED_TASKS</code> list (tasks that have a <code>default_config.json</code>).</p>
+<h3 id="configuration-priority">Configuration Priority<a class="headerlink" href="#configuration-priority" title="Permanent link">&para;</a></h3>
+<p>The preflight loads task configuration with the following priority (later sources override earlier ones):</p>
+<ol>
+<li><strong><code>{task_dir}/default_config.json</code></strong> — Base defaults (required, must exist)</li>
+<li><strong><code>{task_dir}/config.json</code></strong> — Task-specific overrides (optional, checked first)</li>
+<li><strong><code>--config &lt;path&gt;</code></strong> — Explicit custom config via CLI flag</li>
+<li><strong>CLI parameters</strong> — Direct overrides (e.g., <code>--num-gpus 4</code>)</li>
+</ol>
+<p>This allows you to place a <code>config.json</code> in a task directory to customize training parameters without using the <code>--config</code> flag. If <code>config.json</code> doesn't exist, it falls back to <code>default_config.json</code>.</p>
 <h3 id="score-extraction">Score Extraction<a class="headerlink" href="#score-extraction" title="Permanent link">&para;</a></h3>
 <p>The score extractor (<code>benchmarks/einsteinarena/tools/extract_lumen_score.py</code>) scans <code>.factory/lumen/.running/iteration_*/evaluation_results.json</code> for the global best score and outputs:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span><span class="nt">"score"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.85</span><span class="p">,</span><span class="w"> </span><span class="nt">"valid"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
