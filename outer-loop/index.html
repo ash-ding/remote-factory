@@ -880,6 +880,89 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#einsteinarena-lumen-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EinsteinArena + Lumen Integration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="EinsteinArena + Lumen Integration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#benchmark-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benchmark Config
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dual-mode-invocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dual-Mode Invocation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#score-extraction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Score Extraction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-calibrate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example: Calibrate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#supported-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Supported Tasks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#known-limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known Limitations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1333,6 +1416,89 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#einsteinarena-lumen-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EinsteinArena + Lumen Integration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="EinsteinArena + Lumen Integration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#benchmark-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benchmark Config
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dual-mode-invocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dual-Mode Invocation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#score-extraction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Score Extraction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-calibrate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example: Calibrate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#supported-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Supported Tasks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#known-limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known Limitations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1737,6 +1903,62 @@
 <a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">  </span>--test-command<span class="w"> </span><span class="s2">"pytest -xvs"</span><span class="w"> </span><span class="se">\ </span><span class="w">   </span><span class="c1"># override test command</span>
 <a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">  </span>--population-size<span class="w"> </span><span class="m">4</span>
 </code></pre></div>
+<h2 id="einsteinarena-lumen-integration">EinsteinArena + Lumen Integration<a class="headerlink" href="#einsteinarena-lumen-integration" title="Permanent link">&para;</a></h2>
+<p>EinsteinArena is a scientific optimization benchmark with RL-based training via the EinsteinArena-Lumen workflow. Each task directory contains an optimization problem with a verifier, instruction file, and default training config.</p>
+<h3 id="benchmark-config">Benchmark Config<a class="headerlink" href="#benchmark-config" title="Permanent link">&para;</a></h3>
+<p>The benchmark config lives at <code>benchmarks/configs/einsteinarena.toml</code>. It uses the <code>json</code> test format with <code>metric_extraction</code> scoring and references the <code>einsteinarena-lumen</code> seed workflow. The existing <code>JSONEvaluator</code> extracts the score via <code>metric_path = "score"</code>, so no custom evaluator class is needed.</p>
+<h3 id="dual-mode-invocation">Dual-Mode Invocation<a class="headerlink" href="#dual-mode-invocation" title="Permanent link">&para;</a></h3>
+<p>The EinsteinArena-Lumen workflow's preflight supports two invocation modes:</p>
+<ul>
+<li><strong>Mode A (explicit task):</strong> <code>--task circle-packing</code> — the project path points to the factory root and the task is passed as an argument. This is the standard mode for interactive use.</li>
+<li><strong>Mode B (directory inference):</strong> No <code>--task</code> argument — preflight infers the task from the project directory name (e.g., <code>/path/to/circle-packing</code>). This supports the outer loop's worktree isolation, where each instance directory is named after the task.</li>
+</ul>
+<p>Both modes validate against the same <code>SUPPORTED_TASKS</code> list (tasks that have a <code>default_config.json</code>).</p>
+<h3 id="score-extraction">Score Extraction<a class="headerlink" href="#score-extraction" title="Permanent link">&para;</a></h3>
+<p>The score extractor (<code>benchmarks/einsteinarena/tools/extract_lumen_score.py</code>) scans <code>.factory/lumen/.running/iteration_*/evaluation_results.json</code> for the global best score and outputs:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span><span class="nt">"score"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.85</span><span class="p">,</span><span class="w"> </span><span class="nt">"valid"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
+</code></pre></div>
+<p>If no evaluation results exist (e.g., the Lumen workflow failed before producing any), it outputs <code>{"score": 0.0, "valid": false}</code>.</p>
+<h3 id="example-calibrate">Example: Calibrate<a class="headerlink" href="#example-calibrate" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>factory<span class="w"> </span>outer-loop<span class="w"> </span>calibrate<span class="w"> </span>/path/to/factory<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span>--benchmark<span class="w"> </span>einsteinarena<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">  </span>--population-size<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">  </span>--project-dir<span class="w"> </span>/path/to/benchmarks/einsteinarena/circle-packing
+</code></pre></div>
+<h3 id="supported-tasks">Supported Tasks<a class="headerlink" href="#supported-tasks" title="Permanent link">&para;</a></h3>
+<p>Only tasks with <code>default_config.json</code> are supported:</p>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>circle-packing</code></td>
+<td>Pack circles to maximize density</td>
+</tr>
+<tr>
+<td><code>first-autocorrelation-inequality</code></td>
+<td>Optimize first autocorrelation bound</td>
+</tr>
+<tr>
+<td><code>second-autocorrelation-inequality</code></td>
+<td>Optimize second autocorrelation bound</td>
+</tr>
+<tr>
+<td><code>erdos-min-overlap</code></td>
+<td>Minimize overlap in Erdos problem</td>
+</tr>
+</tbody>
+</table>
+<h3 id="known-limitations">Known Limitations<a class="headerlink" href="#known-limitations" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Lumen requires a GPU environment with vLLM, verl, and PyTorch — the outer loop evaluation nodes must have GPU access or run in <code>--mock</code> mode.</li>
+<li>Evaluation is sequential (one candidate at a time) in the current MVP. Parallel evaluation across GPU nodes is planned for v2.</li>
+<li>The score extractor reads only from <code>.factory/lumen/.running/</code> — it does not aggregate across multiple Lumen runs.</li>
+</ul>
 
 
 
